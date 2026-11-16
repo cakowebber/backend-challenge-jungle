@@ -46,7 +46,6 @@ describe('PrometheusMetrics', () => {
 
     const lines = metrics.render().split('\n');
     expect(lines).toContain('# TYPE duracao_seconds histogram');
-    // 0.1 inclui o próprio limite (le = "menor ou igual").
     expect(lines).toContain('duracao_seconds_bucket{source="http",le="0.1"} 2');
     expect(lines).toContain('duracao_seconds_bucket{source="http",le="0.5"} 3');
     expect(lines).toContain('duracao_seconds_bucket{source="http",le="1"} 4');

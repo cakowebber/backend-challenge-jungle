@@ -1,7 +1,3 @@
-/**
- * Erros da camada de aplicação. Cada classe corresponde a UMA situação que a
- * API precisa distinguir (desafio 9); a borda HTTP só traduz classe -> status.
- */
 export abstract class ApplicationError extends Error {
   abstract readonly code: string;
 
@@ -16,7 +12,6 @@ export interface FieldError {
   message: string;
 }
 
-/** Payload, header, parâmetro ou cursor malformado. -> 400 */
 export class InvalidRequestError extends ApplicationError {
   readonly code = 'INVALID_PAYLOAD';
 
@@ -25,7 +20,6 @@ export class InvalidRequestError extends ApplicationError {
   }
 }
 
-/** Mesma idempotency key com payload diferente: conflito, não replay. -> 409 */
 export class IdempotencyConflictError extends ApplicationError {
   readonly code = 'IDEMPOTENCY_KEY_CONFLICT';
 
@@ -34,7 +28,6 @@ export class IdempotencyConflictError extends ApplicationError {
   }
 }
 
-/** Mesma operação do provedor reenviada com OUTRA idempotency key. -> 409 */
 export class ExternalTransactionConflictError extends ApplicationError {
   readonly code = 'EXTERNAL_TRANSACTION_ID_CONFLICT';
 
@@ -45,10 +38,6 @@ export class ExternalTransactionConflictError extends ApplicationError {
   }
 }
 
-/**
- * O mesmo messageId chegou de novo pela fila com OUTRO conteúdo. Não é
- * redelivery: é reuso indevido do id. A mensagem vai para a DLQ.
- */
 export class MessageIdConflictError extends ApplicationError {
   readonly code = 'MESSAGE_ID_CONFLICT';
 
@@ -57,7 +46,6 @@ export class MessageIdConflictError extends ApplicationError {
   }
 }
 
-/** Já existe wallet para o player nesta moeda. -> 409 */
 export class WalletAlreadyExistsError extends ApplicationError {
   readonly code = 'WALLET_ALREADY_EXISTS';
 
@@ -66,11 +54,6 @@ export class WalletAlreadyExistsError extends ApplicationError {
   }
 }
 
-/**
- * Rejeição de negócio que NÃO vira transação persistida: a wallet não existe,
- * e a FK impede gravar uma transação para ela. -> 422 com failureCode.
- * Nada é gravado, então o provedor pode reenviar o mesmo id depois de criar a wallet.
- */
 export class WalletNotFoundForTransactionError extends ApplicationError {
   readonly code = 'WALLET_NOT_FOUND';
   readonly failureCode = 'WALLET_NOT_FOUND';
@@ -80,7 +63,6 @@ export class WalletNotFoundForTransactionError extends ApplicationError {
   }
 }
 
-/** Recurso consultado não existe. -> 404 */
 export class ResourceNotFoundError extends ApplicationError {
   readonly code = 'NOT_FOUND';
 
@@ -89,10 +71,6 @@ export class ResourceNotFoundError extends ApplicationError {
   }
 }
 
-/**
- * Credencial ausente ou inválida. Só é lançado por um adaptador de Identity
- * Provider; com a autenticação desligada nunca acontece. -> 401
- */
 export class UnauthenticatedError extends ApplicationError {
   readonly code = 'UNAUTHENTICATED';
 
@@ -101,7 +79,6 @@ export class UnauthenticatedError extends ApplicationError {
   }
 }
 
-/** Provedor autenticado tentando agir em nome de outro. -> 403 */
 export class ProviderNotAllowedError extends ApplicationError {
   readonly code = 'PROVIDER_NOT_ALLOWED';
 
@@ -112,10 +89,6 @@ export class ProviderNotAllowedError extends ApplicationError {
 
 export type TransientReason = 'LOCK_TIMEOUT' | 'DEADLOCK' | 'DATABASE_UNAVAILABLE' | 'CONCURRENT_UPDATE';
 
-/**
- * Falha transitória de infraestrutura: nada foi gravado e a mesma requisição
- * pode ser reenviada com a mesma idempotency key. -> 503
- */
 export class TransientFailureError extends ApplicationError {
   readonly code = 'TRANSIENT_FAILURE';
 

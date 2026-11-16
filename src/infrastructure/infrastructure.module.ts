@@ -34,7 +34,6 @@ import { OperationalGauges } from './observability/operational-gauges';
 import { PrometheusMetrics } from './observability/prometheus-metrics';
 import { SystemClock, UuidV7Generator } from './support';
 
-/** Implementações das portas da aplicação. Nenhuma regra de negócio mora aqui. */
 @Module({})
 export class InfrastructureModule implements OnApplicationShutdown {
   constructor(@Inject(SQS_CLIENT) private readonly sqs: SQSClient) {}
@@ -49,9 +48,6 @@ export class InfrastructureModule implements OnApplicationShutdown {
             poolMax: env.databasePoolMax,
             lockTimeoutMs: env.databaseLockTimeoutMs,
           }),
-          // Sem o middleware de RequestContext: o contexto do EntityManager é
-          // sempre aberto de forma explícita pelo UnitOfWork (transactional/session),
-          // do mesmo jeito para HTTP, fila e workers.
           registerRequestContext: false,
         }),
       ],
@@ -72,19 +68,15 @@ export class InfrastructureModule implements OnApplicationShutdown {
         },
         { provide: CLOCK, useClass: SystemClock },
         { provide: ID_GENERATOR, useClass: UuidV7Generator },
-        // Uma instância por processo: os contadores são do processo, e /metrics os expõe.
         { provide: METRICS, useValue: new PrometheusMetrics() },
         {
           provide: APP_LOGGER,
-          // `instance` distingue as réplicas quando os logs são agregados (no Docker é o id do container).
           useValue: new JsonLogger({
             level: env.logLevel,
             base: { service: 'wagering-processor', instance: hostname() },
           }),
         },
         OperationalGauges,
-        // Ponto de extensão da autenticação: trocar este adaptador no-op pelo do
-        // Identity Provider liga a autenticação em todos os endpoints de negócio.
         { provide: PROVIDER_IDENTITY, useClass: OpenProviderIdentity },
       ],
       exports: [
@@ -108,7 +100,6 @@ export class InfrastructureModule implements OnApplicationShutdown {
     };
   }
 
-  /** Fecha os sockets do SQS no shutdown; o pool do Postgres é fechado pelo MikroOrmModule. */
   onApplicationShutdown(): void {
     this.sqs.destroy();
   }

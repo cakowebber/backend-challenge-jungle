@@ -9,39 +9,16 @@ import type { UnitOfWork } from './ports/unit-of-work';
 export const OUTBOX_PUBLISH_SETTINGS = Symbol('OUTBOX_PUBLISH_SETTINGS');
 
 export interface OutboxPublishSettings {
-  /** Mensagens por ciclo. */
   batchSize: number;
-  /** Backoff de uma publicação que falhou. Não há limite de tentativas. */
   retry: BackoffPolicy;
 }
 
 export interface PublishOutboxResult {
-  /** Mensagens que este ciclo travou. */
   claimed: number;
   published: number;
   failed: number;
 }
 
-/**
- * Um ciclo do outbox publisher. Tudo em UMA transação SQL:
- *
- *   1. trava um lote de pendentes (FOR UPDATE SKIP LOCKED);
- *   2. publica;
- *   3. marca as aceitas como publicadas e agenda nova tentativa para as demais;
- *   4. COMMIT.
- *
- * Por que o lock fica aberto durante o envio: é ele que impede dois publishers
- * de enviarem a mesma mensagem, e ele some sozinho se o processo morrer.
- *
- * Se o processo morrer entre 2 e 4, a transação sofre rollback, a mensagem
- * continua pendente e será publicada DE NOVO, com o mesmo id. A entrega é
- * "pelo menos uma vez": nunca se perde um evento confirmado, e a duplicata é
- * identificável pelo eventId. Marcar antes de publicar inverteria isso — uma
- * queda perderia o evento.
- *
- * Os eventos só existem na tabela depois do commit da transação de negócio
- * (READ COMMITTED), então nada é publicado antes do commit.
- */
 export class PublishOutboxBatch {
   constructor(
     private readonly unitOfWork: UnitOfWork,
@@ -53,7 +30,6 @@ export class PublishOutboxBatch {
   ) {}
 
   async execute(): Promise<PublishOutboxResult> {
-    /** Segundos entre cada evento ocorrer e ser publicado neste ciclo. */
     const delays: number[] = [];
 
     const result = await this.unitOfWork.transactional(async (): Promise<PublishOutboxResult> => {
@@ -84,7 +60,6 @@ export class PublishOutboxBatch {
       return { claimed: batch.length, published: published.length, failed: batch.length - published.length };
     });
 
-    // Métricas só depois do commit: se a transação falhar, nada foi marcado.
     if (result.published > 0) {
       this.metrics.increment(MetricName.OutboxPublished, {}, result.published);
       for (const delay of delays) {
@@ -97,12 +72,6 @@ export class PublishOutboxBatch {
     return result;
   }
 
-  /**
-   * Uma falha de envio NÃO aborta a transação: ela precisa commitar para
-   * gravar o backoff de cada mensagem. Se o envio inteiro falhar (rede, SQS
-   * fora, prazo estourado), o lote todo conta como não publicado — mesmo que
-   * alguma mensagem tenha chegado ao destino, caso em que será republicada.
-   */
   private async send(batch: readonly OutboxMessage[]): Promise<ReadonlyMap<string, string>> {
     try {
       return await this.publisher.publish(batch);

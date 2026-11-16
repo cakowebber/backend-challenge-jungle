@@ -1,19 +1,4 @@
-/**
- * Erros do domínio. Três famílias com destinos diferentes:
- *
- * - validação de entrada (InvalidMoneyError, DomainValidationError): o chamador
- *   mandou algo malformado. Na borda HTTP vira 400; na fila, mensagem permanente.
- * - guardas de invariante (CurrencyMismatchError, InsufficientFundsError,
- *   UnbalancedLedgerEntryError): última linha de defesa dos agregados. As regras
- *   de negócio checam antes e rejeitam com failureCode; se uma dessas estourar
- *   em produção, é bug.
- * - erro de programação (InvalidTransactionStateError, DomainInvariantError):
- *   nunca é caminho de negócio.
- *
- * Rejeição de negócio NÃO é exceção: é um estado (REJECTED + failureCode).
- */
 export abstract class DomainError extends Error {
-  /** Identificador estável, legível por máquina. */
   abstract readonly code: string;
 
   protected constructor(message: string) {
@@ -84,7 +69,6 @@ export class DomainInvariantError extends DomainError {
   }
 }
 
-/** Guarda comum das factories: identificadores e chaves não podem ser vazios. */
 export function requireNonEmpty(field: string, value: string): string {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new DomainValidationError(field, 'é obrigatório');

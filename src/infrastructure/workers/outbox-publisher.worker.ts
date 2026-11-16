@@ -4,14 +4,6 @@ import { PublishOutboxBatch } from '../../application/publish-outbox-batch';
 import { ENV, type Env } from '../config/env';
 import { PollingLoop } from './polling-loop';
 
-/**
- * Outbox publisher: publica, depois do commit, os eventos que as transações de
- * negócio gravaram na outbox. Toda instância roda um; eles não se coordenam —
- * o SKIP LOCKED do banco reparte os lotes.
- *
- * Lote cheio e sem falhas: busca o próximo na hora (há fila para drenar).
- * Caso contrário espera o intervalo, o que também evita martelar um SQS fora do ar.
- */
 @Injectable()
 export class OutboxPublisherWorker implements OnApplicationBootstrap, BeforeApplicationShutdown {
   private readonly loop: PollingLoop;
@@ -45,11 +37,6 @@ export class OutboxPublisherWorker implements OnApplicationBootstrap, BeforeAppl
     }
   }
 
-  /**
-   * Antes de o pool do banco fechar: o lote em curso termina (envia e marca).
-   * O que ficar pendente na outbox é publicado por outra instância, ou por
-   * esta quando voltar.
-   */
   async beforeApplicationShutdown(): Promise<void> {
     await this.stop();
   }

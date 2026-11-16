@@ -1,9 +1,5 @@
 import { Migration } from '@mikro-orm/migrations';
 
-/**
- * wallets — saldo materializado, uma linha por (player, moeda).
- * É a linha travada com SELECT ... FOR UPDATE a cada transação.
- */
 export class Migration20261114000001_wallets extends Migration {
   override async up(): Promise<void> {
     this.addSql(`

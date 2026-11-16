@@ -4,21 +4,15 @@ export type MetricType = 'counter' | 'gauge' | 'histogram';
 
 export interface MetricDefinition {
   readonly type: MetricType;
-  /** Texto da linha `# HELP` em /metrics. */
   readonly help: string;
-  /** Labels que a métrica usa. Todos de poucos valores possíveis; nunca um id. */
   readonly labels?: readonly string[];
-  /** Limites superiores dos buckets, em segundos (só histogramas). */
   readonly buckets?: readonly number[];
 }
 
-/** Latência de processamento: de 5ms a 10s. */
 const DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10] as const;
 
-/** Atraso de publicação: de 100ms a 5 minutos. */
 const DELAY_BUCKETS = [0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 300] as const;
 
-/** Valores lidos do banco e do SQS a cada GET /metrics (estado global, igual em todas as instâncias). */
 export const GaugeName = {
   OutboxPending: 'outbox_pending_events',
   OutboxLag: 'outbox_lag_seconds',
@@ -27,11 +21,6 @@ export const GaugeName = {
   QueueMessages: 'wager_queue_messages',
 } as const;
 
-/**
- * Catálogo de tudo que /metrics expõe. Contadores e histogramas são do
- * processo (o que ESTA instância viu desde que subiu; o Prometheus soma as
- * instâncias). Gauges são estado global, lido na hora do scrape.
- */
 export const METRIC_CATALOG: Readonly<Record<string, MetricDefinition>> = {
   [MetricName.TransactionsByStatus]: {
     type: 'counter',

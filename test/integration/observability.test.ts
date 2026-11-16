@@ -5,12 +5,6 @@ import { Cluster } from '../support/cluster';
 import { startTestApp, type TestApp } from '../support/test-app';
 import { eventually, TestQueues } from '../support/test-queues';
 
-/**
- * Observabilidade conferida por fora, como um operador veria:
- *  - GET /metrics de uma aplicação real sobre Postgres e LocalStack reais;
- *  - o stdout de um processo real (`bun src/main.ts`), linha a linha.
- */
-
 setDefaultTimeout(30_000);
 
 interface Sample {
@@ -19,7 +13,6 @@ interface Sample {
   value: number;
 }
 
-/** Lê o texto do Prometheus de volta para amostras. */
 function parseMetrics(text: string): Sample[] {
   const samples: Sample[] = [];
   for (const line of text.split('\n')) {
@@ -37,7 +30,6 @@ function parseMetrics(text: string): Sample[] {
   return samples;
 }
 
-/** Soma das séries da métrica que têm estes labels. undefined se nenhuma série existe. */
 function valueOf(samples: Sample[], name: string, labels: Record<string, string> = {}): number | undefined {
   const matching = samples.filter(
     (sample) => sample.name === name && Object.entries(labels).every(([label, value]) => sample.labels[label] === value),
@@ -59,12 +51,10 @@ describe('GET /metrics', () => {
     return parseMetrics(await scrapeText(target));
   }
 
-  /** Quanto a métrica subiu entre dois scrapes. */
   function delta(before: Sample[], after: Sample[], name: string, labels: Record<string, string> = {}): number {
     return (valueOf(after, name, labels) ?? 0) - (valueOf(before, name, labels) ?? 0);
   }
 
-  /** Segura o lock da wallet numa transação à parte até `release()` ser chamado. */
   async function holdWalletLock(walletId: string): Promise<{ release: () => Promise<void> }> {
     let free!: () => void;
     const freed = new Promise<void>((resolve) => (free = resolve));
@@ -84,7 +74,6 @@ describe('GET /metrics', () => {
     };
   }
 
-  /** Publica tudo que está pendente na outbox (o publisher em segundo plano fica desligado nos testes). */
   async function publishOutbox(): Promise<number> {
     const publisher = app.app.get(PublishOutboxBatch);
     let published = 0;
@@ -153,11 +142,9 @@ describe('GET /metrics', () => {
     expect(delta(before, after, duration, { source: 'http', outcome: 'PROCESSED' })).toBe(1);
     expect(delta(before, after, duration, { source: 'http', outcome: 'REJECTED' })).toBe(1);
     expect(delta(before, after, duration, { source: 'http', outcome: 'DUPLICATE' })).toBe(1);
-    // Todas as observações caem em algum bucket: o +Inf é igual à contagem.
     expect(valueOf(after, 'wager_transaction_duration_seconds_bucket', { le: '+Inf' })).toBe(valueOf(after, duration));
     expect(valueOf(after, 'wager_transaction_duration_seconds_sum')).toBeGreaterThan(0);
 
-    // Nenhum id vira label: a cardinalidade não cresce com wallets nem com provedores.
     expect(text).not.toContain(wallet.id);
     expect(text).not.toContain('provider-a');
   });
@@ -191,7 +178,6 @@ describe('GET /metrics', () => {
     expect(
       delta(before, after, 'wager_transaction_duration_seconds_count', { source: 'http', outcome: 'TRANSIENT_FAILURE' }),
     ).toBe(1);
-    // A espera de ~300ms pelo lock aparece no histograma do lock, fora dos buckets rápidos.
     expect(delta(before, after, 'wallet_lock_wait_seconds_count')).toBe(1);
     expect(delta(before, after, 'wallet_lock_wait_seconds_bucket', { le: '0.1' })).toBe(0);
   });
@@ -219,7 +205,6 @@ describe('GET /metrics', () => {
     expect(valueOf(published, GaugeName.OutboxPending)).toBe(0);
     expect(valueOf(published, GaugeName.OutboxLag)).toBe(0);
     expect(delta(lagging, published, 'outbox_events_published_total')).toBe(pending);
-    // O atraso de cada evento (mais de 1s) entra no histograma de publicação.
     expect(delta(lagging, published, 'outbox_publish_delay_seconds_count')).toBe(pending);
     expect(delta(lagging, published, 'outbox_publish_delay_seconds_bucket', { le: '1' })).toBe(0);
   });
@@ -270,7 +255,6 @@ describe('GET /metrics', () => {
     expect(delta(before, after, 'wager_messages_dead_lettered_total', { reason: 'INVALID_MESSAGE' })).toBe(1);
     expect(valueOf(after, GaugeName.DlqMessages)).toBe(1);
 
-    // O gauge é o estado da fila: esvaziou a DLQ, ele volta a zero (o contador não).
     await queues.drain(queues.dlqUrl);
     const emptied = await scrape();
     expect(valueOf(emptied, GaugeName.DlqMessages)).toBe(0);
@@ -288,7 +272,6 @@ describe('GET /metrics', () => {
       expect(valueOf(samples, 'metrics_collection_errors_total', { source: 'sqs' })).toBe(1);
       expect(valueOf(samples, GaugeName.DlqMessages)).toBeUndefined();
       expect(valueOf(samples, GaugeName.QueueMessages)).toBeUndefined();
-      // O que vem do banco e os contadores do processo continuam lá.
       expect(valueOf(samples, GaugeName.OutboxPending)).toBeNumber();
       expect(valueOf(samples, 'wager_duplicates_detected_total')).toBe(0);
     } finally {
@@ -305,7 +288,6 @@ describe('GET /metrics', () => {
     expect(generated.status).toBe(400);
     expect(generated.headers.get('x-correlation-id')).toMatch(/^[0-9a-f-]{36}$/);
 
-    // JSON malformado é recusado pelo parser antes do middleware; o filtro de erros cobre esse caso.
     const malformed = await app.request('POST', '/wagering/transactions', {
       body: '{"kind": ',
       headers: { 'x-correlation-id': 'corr-json-malformado' },
@@ -348,11 +330,9 @@ describe('logs de um processo real', () => {
   test('toda linha é JSON com os ids de rastreio no nível raiz, e nenhum valor financeiro', async () => {
     const [client] = cluster.clients;
     if (client === undefined) throw new Error('cluster sem instância');
-    // Valores fáceis de procurar na saída: nenhum deles pode aparecer.
     const amounts = { initial: '4321.07', http: '37.91', queue: '12.34', rejected: '999999.99' };
     const wallet = await client.createWallet(amounts.initial);
 
-    // HTTP aprovado, HTTP rejeitado, replay, requisição inválida, fila aprovada e fila para a DLQ.
     const viaHttp = client.payload(wallet, 'BET', amounts.http);
     const approved = await client.post('/wagering/transactions', viaHttp, {
       'idempotency-key': `provider-a:${viaHttp.externalTransactionId}`,
@@ -381,7 +361,6 @@ describe('logs de um processo real', () => {
       );
     });
 
-    // 1. Formato: cada linha do processo (inclusive as do Nest) é um objeto JSON com os campos fixos.
     const lines = cluster.nodes[0]?.output ?? [];
     expect(lines.length).toBeGreaterThan(10);
     for (const line of lines) {
@@ -394,7 +373,6 @@ describe('logs de um processo real', () => {
     }
     expect(entries().some((candidate) => candidate.context === 'NestApplication')).toBe(true);
 
-    // 2. Transação por HTTP: correlationId do chamador, transactionId, walletId e providerId.
     expect(entry('transação processada', { correlationId: 'corr-log-http' })).toMatchObject({
       level: 'info',
       transactionId: approved.body.transactionId,
@@ -413,7 +391,6 @@ describe('logs de um processo real', () => {
       status: 201,
     });
 
-    // 3. Rejeição de negócio e replay ficam visíveis pelo desfecho.
     expect(entry('transação processada', { transactionId: rejected.body.transactionId })).toMatchObject({
       status: 'REJECTED',
       failureCode: 'INSUFFICIENT_FUNDS',
@@ -427,7 +404,6 @@ describe('logs de um processo real', () => {
       code: 'INVALID_PAYLOAD',
     });
 
-    // 4. Transação pela fila: os mesmos campos, mais o messageId.
     expect(entry('transação processada', { messageId: 'msg-log-1' })).toMatchObject({
       correlationId: 'msg-log-1',
       walletId: wallet.id,
@@ -444,7 +420,6 @@ describe('logs de um processo real', () => {
       reason: 'WALLET_NOT_FOUND',
     });
 
-    // 5. Nenhum valor, saldo ou payload em nenhuma linha.
     const output = lines.join('\n');
     for (const amount of Object.values(amounts)) {
       expect(output).not.toContain(amount);

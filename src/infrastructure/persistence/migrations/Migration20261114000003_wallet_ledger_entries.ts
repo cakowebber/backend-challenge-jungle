@@ -1,9 +1,5 @@
 import { Migration } from '@mikro-orm/migrations';
 
-/**
- * wallet_ledger_entries — ledger append-only. Cada linha explica uma mudança
- * de saldo; a soma delas reconstrói o saldo da wallet.
- */
 export class Migration20261114000003_wallet_ledger_entries extends Migration {
   override async up(): Promise<void> {
     this.addSql(`
@@ -47,7 +43,6 @@ export class Migration20261114000003_wallet_ledger_entries extends Migration {
       )
     `);
 
-    // Append-only: nenhuma linha é alterada ou removida, nem por TRUNCATE.
     this.addSql(`
       CREATE FUNCTION wallet_ledger_entries_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
@@ -68,9 +63,6 @@ export class Migration20261114000003_wallet_ledger_entries extends Migration {
         FOR EACH STATEMENT EXECUTE FUNCTION wallet_ledger_entries_append_only()
     `);
 
-    // Saldo e ledger andam juntos. Checado no COMMIT (trigger adiado): o saldo
-    // da wallet tem que ser o balance_after do último lançamento dela, ou zero
-    // se ela não tem lançamentos. Barra mover saldo sem ledger e o inverso.
     this.addSql(`
       CREATE FUNCTION assert_wallet_balance_matches_ledger() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE
@@ -118,7 +110,6 @@ export class Migration20261114000003_wallet_ledger_entries extends Migration {
   }
 
   override async down(): Promise<void> {
-    // O trigger em wallets foi criado aqui, então é removido aqui.
     this.addSql(`DROP TRIGGER wallets_balance_matches_ledger ON wallets`);
     this.addSql(`DROP TABLE wallet_ledger_entries`);
     this.addSql(`DROP FUNCTION assert_wallet_balance_matches_ledger()`);

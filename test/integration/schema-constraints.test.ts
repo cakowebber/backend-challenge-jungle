@@ -14,11 +14,6 @@ import {
 } from '../support/sql-fixtures';
 import { expectViolation, migratedTestDatabase, SqlState } from '../support/test-database';
 
-/**
- * Cada teste tenta gravar o caso inválido com SQL direto, sem passar pela
- * aplicação: o que está sendo provado é que o BANCO recusa, sozinho.
- */
-
 let sql: SQL;
 
 beforeAll(async () => {
@@ -274,7 +269,6 @@ describe('wager_transactions — coerência', () => {
 });
 
 describe('wager_transactions — reversão única por referência', () => {
-  /** Reversão já aplicada apontando para `bet`. */
   function reversalOf(walletId: string, betId: string, kind: 'REFUND' | 'ROLLBACK') {
     return transactionRow(walletId, {
       kind,
@@ -361,7 +355,6 @@ describe('wager_transactions — imutabilidade', () => {
     );
   });
 
-  /** REFUND aguardando a referência — o único estado não terminal que fica gravado. */
   async function pendingReference() {
     const wallet = await openWallet(sql);
     const bet = await insertTransaction(sql, transactionRow(wallet.id));
@@ -433,7 +426,6 @@ describe('wager_transactions — imutabilidade', () => {
   test('TRUNCATE é recusado, mesmo com CASCADE', async () => {
     const { bet } = await pendingReference();
 
-    // CASCADE alcança o ledger, e qualquer um dos dois triggers de TRUNCATE pode barrar primeiro.
     let error: { errno?: string; constraint?: string } = {};
     try {
       await sql`TRUNCATE wager_transactions CASCADE`;
@@ -452,7 +444,6 @@ describe('wallet_ledger_entries', () => {
     const wallet = await openWallet(sql, '100.00');
     const { transaction } = await debit(sql, wallet, '25.00', '100.00', '75.00');
 
-    // Um retry tentando debitar de novo pela mesma transação.
     await expectViolation(
       () =>
         sql.begin(async (tx) => {
@@ -476,7 +467,6 @@ describe('wallet_ledger_entries', () => {
       () => sql`UPDATE wallet_ledger_entries SET amount = 1.00 WHERE id = ${entry.id}`,
       guard('wallet_ledger_entries_append_only'),
     );
-    // nem um UPDATE que não muda nada
     await expectViolation(
       () => sql`UPDATE wallet_ledger_entries SET amount = amount WHERE id = ${entry.id}`,
       guard('wallet_ledger_entries_append_only'),
@@ -520,12 +510,10 @@ describe('wallet_ledger_entries', () => {
     const wallet = await openWallet(sql, '100.00');
     const tx = await insertTransaction(sql, transactionRow(wallet.id));
 
-    // 100.00 - 25.00 não é 80.00
     await expectViolation(
       () => insertLedgerEntry(sql, ledgerRow(wallet.id, tx.id, { balance_after: '80.00' })),
       check('wallet_ledger_entries_balanced'),
     );
-    // direção trocada: 100.00 + 25.00 não é 75.00
     await expectViolation(
       () => insertLedgerEntry(sql, ledgerRow(wallet.id, tx.id, { direction: 'CREDIT' })),
       check('wallet_ledger_entries_balanced'),
@@ -623,7 +611,7 @@ describe('saldo e ledger andam juntos (checado no COMMIT)', () => {
         sql.begin(async (tx) => {
           const bet = await insertTransaction(tx, transactionRow(wallet.id));
           await tx`UPDATE wallets SET balance = 70.00 WHERE id = ${wallet.id}`;
-          await insertLedgerEntry(tx, ledgerRow(wallet.id, bet.id)); // lançamento diz 75.00
+          await insertLedgerEntry(tx, ledgerRow(wallet.id, bet.id));
         }),
       mismatch,
     );
@@ -635,10 +623,10 @@ describe('saldo e ledger andam juntos (checado no COMMIT)', () => {
 
     await sql.begin(async (tx) => {
       const bet = await insertTransaction(tx, transactionRow(wallet.id));
-      await insertLedgerEntry(tx, ledgerRow(wallet.id, bet.id)); // lançamento primeiro
+      await insertLedgerEntry(tx, ledgerRow(wallet.id, bet.id));
       await tx`UPDATE wallets SET balance = 75.00 WHERE id = ${wallet.id}`;
     });
-    await debit(sql, wallet, '25.00', '75.00', '50.00'); // saldo primeiro
+    await debit(sql, wallet, '25.00', '75.00', '50.00');
 
     expect(await balanceOf(sql, wallet.id)).toBe('50.00');
   });
@@ -716,7 +704,6 @@ describe('outbox_messages', () => {
     ...overrides,
   });
 
-  /** Plano de execução com seq scan desligado: mostra se o índice SERVE para a consulta. */
   async function planOf(query: string): Promise<string> {
     return sql.begin(async (tx) => {
       await tx`SET LOCAL enable_seqscan = off`;

@@ -13,13 +13,6 @@ export interface OutboxMessageState {
   publishedAt: Date | undefined;
 }
 
-/**
- * Evento aguardando publicação. É gravado na mesma transação SQL da mudança
- * que o originou e publicado depois do commit por um worker.
- *
- * Não existe limite de tentativas: um evento confirmado não pode ser perdido,
- * então a publicação é repetida com backoff até dar certo.
- */
 export class OutboxMessage {
   private constructor(
     public readonly id: string,
@@ -32,7 +25,6 @@ export class OutboxMessage {
     private _publishedAt: Date | undefined,
   ) {}
 
-  /** O id da mensagem é o eventId: o consumidor usa esse id para deduplicar. */
   static enqueue(event: IntegrationEvent<unknown>): OutboxMessage {
     return new OutboxMessage(
       event.eventId,
@@ -75,7 +67,6 @@ export class OutboxMessage {
     return this._publishedAt === undefined;
   }
 
-  /** Pendente e sem espera de backoff em aberto. Recém-criada está sempre devida. */
   isDue(now: Date): boolean {
     return this.isPending() && (this._nextAttemptAt === undefined || this._nextAttemptAt <= now);
   }
@@ -86,7 +77,6 @@ export class OutboxMessage {
     this._nextAttemptAt = undefined;
   }
 
-  /** Publicação falhou: incrementa attempts e calcula o próximo nextAttemptAt (backoff). */
   scheduleRetry(now: Date, policy: BackoffPolicy): void {
     this.assertPending('scheduleRetry');
     this._attempts += 1;

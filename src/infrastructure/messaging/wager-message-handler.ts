@@ -18,37 +18,19 @@ import { DomainValidationError, InvalidMoneyError } from '../../domain/errors';
 import { ENV, type Env } from '../config/env';
 import { parseWagerMessage } from './wager-message';
 
-/** O que o consumer deve fazer com a mensagem depois de processá-la. */
 export type MessageDisposition =
-  /** O desfecho está gravado no banco: pode apagar a mensagem. */
   | { action: 'ACK'; outcome: string }
-  /** Falhou agora, mas pode dar certo depois: não apaga; volta após `delaySeconds`. */
   | { action: 'RETRY'; reason: string; delaySeconds: number; pauseConsumption: boolean }
-  /** Não vai dar certo nunca, e nada ficou gravado: preserva a mensagem na DLQ. */
   | { action: 'DEAD_LETTER'; reason: string; detail: string };
 
 export interface IncomingMessage {
   body: string;
-  /** Id que o SQS deu à mensagem; identifica nos logs a que nem pôde ser lida. */
   sqsMessageId?: string | undefined;
-  /** Quantas vezes o SQS já entregou esta mensagem (ApproximateReceiveCount). */
   receiveCount: number;
 }
 
 const MAX_RETRY_DELAY_MS = 60_000;
 
-/**
- * Processa uma mensagem chamando o MESMO use case do HTTP e classifica o
- * resultado. A regra central: só há ACK quando o desfecho ficou gravado no
- * banco. Fora isso a mensagem é preservada — para tentar de novo, ou na DLQ.
- *
- *   desfecho gravado (PROCESSED, REJECTED, PENDING_REFERENCE, replay, duplicata)  -> ACK
- *   mensagem ou payload inválido                                                 -> DLQ na hora
- *   negócio sem registro (wallet inexistente, conflito de idempotência)          -> DLQ na hora
- *   transitório (lock, deadlock, banco fora)                                     -> RETRY com backoff
- *   inesperado                                                                   -> RETRY; na última
- *                                              tentativa grava FAILED e manda para a DLQ
- */
 @Injectable()
 export class WagerMessageHandler {
   constructor(
@@ -92,7 +74,6 @@ export class WagerMessageHandler {
     };
 
     try {
-      // O sucesso é logado pelo próprio use case (com messageId e transactionId).
       const result = await this.processWagerTransaction.execute(command);
       return { action: 'ACK', outcome: result.idempotentReplay ? 'DUPLICATE' : result.transaction.status };
     } catch (error) {
@@ -108,7 +89,6 @@ export class WagerMessageHandler {
   ): Promise<MessageDisposition> {
     const detail = error instanceof Error ? error.message : String(error);
 
-    // Payload que só o domínio consegue recusar (ex.: REFUND sem referência).
     if (
       error instanceof InvalidRequestError ||
       error instanceof DomainValidationError ||
@@ -118,7 +98,6 @@ export class WagerMessageHandler {
       return { action: 'DEAD_LETTER', reason: 'INVALID_PAYLOAD', detail };
     }
 
-    // Negócio, mas sem transação gravada. Um ack apagaria a mensagem sem rastro.
     if (
       error instanceof WalletNotFoundForTransactionError ||
       error instanceof IdempotencyConflictError ||
@@ -135,13 +114,10 @@ export class WagerMessageHandler {
         action: 'RETRY',
         reason: error.reason,
         delaySeconds: this.retryDelaySeconds(receiveCount),
-        // Banco fora do ar não é problema desta mensagem: o consumer para de
-        // receber, para não gastar as tentativas de todas as outras.
         pauseConsumption: error.reason === 'DATABASE_UNAVAILABLE',
       };
     }
 
-    // Inesperado: bug, invariante violada, erro do banco que não é transitório.
     if (receiveCount < this.env.consumer.maxAttempts) {
       this.logger.error('erro inesperado; a mensagem volta para a fila', { ...context, reason: detail });
       return {
@@ -157,7 +133,6 @@ export class WagerMessageHandler {
     return { action: 'DEAD_LETTER', reason: 'PROCESSING_FAILED', detail: `${detail} (registro FAILED: ${recorded})` };
   }
 
-  /** Melhor esforço: se nem isso funcionar, a mensagem ainda fica preservada na DLQ. */
   private async recordAsFailed(
     command: ProcessWagerTransactionCommand,
     context: Record<string, string | number | undefined>,
@@ -173,7 +148,6 @@ export class WagerMessageHandler {
     }
   }
 
-  /** Backoff exponencial pela contagem de recebimentos: base, 2x, 4x... até 60s. */
   private retryDelaySeconds(receiveCount: number): number {
     const delayMs = backoffDelayMs(Math.max(1, receiveCount), {
       baseDelayMs: this.env.consumer.retryBaseDelaySeconds * 1000,

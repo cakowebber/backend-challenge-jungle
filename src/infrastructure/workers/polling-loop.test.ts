@@ -6,7 +6,6 @@ function silentLogger(warnings: string[] = []): AppLogger {
   return { info: () => undefined, warn: (message) => void warnings.push(message), error: () => undefined };
 }
 
-/** Espera uma condição, sondando rápido. */
 async function until(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
@@ -23,7 +22,7 @@ describe('PollingLoop', () => {
     const loop = new PollingLoop('teste', 60_000, async () => (++ticks < 5 ? 'MORE' : 'IDLE'), silentLogger());
 
     loop.start();
-    await until(() => ticks === 5); // com intervalo de 60s, só chega a 5 se não esperou entre os ciclos
+    await until(() => ticks === 5);
     await loop.stop();
 
     expect(ticks).toBe(5);
@@ -36,7 +35,7 @@ describe('PollingLoop', () => {
     loop.start();
     await until(() => ticks === 1);
     await Bun.sleep(10);
-    expect(ticks).toBe(1); // ainda dormindo
+    expect(ticks).toBe(1);
     await until(() => ticks >= 2);
     await loop.stop();
   });
@@ -84,7 +83,7 @@ describe('PollingLoop', () => {
     let stopped = false;
     const stopping = loop.stop().then(() => (stopped = true));
     await Bun.sleep(20);
-    expect(stopped).toBe(false); // o ciclo ainda não terminou: stop espera por ele
+    expect(stopped).toBe(false);
 
     finishTick();
     await stopping;
@@ -97,7 +96,7 @@ describe('PollingLoop', () => {
     const loop = new PollingLoop('teste', 60_000, async () => (ticks++, 'IDLE'), silentLogger());
 
     loop.start();
-    await until(() => ticks === 1); // agora o laço está dormindo os 60s
+    await until(() => ticks === 1);
     const startedAt = Date.now();
     await loop.stop();
 
@@ -116,6 +115,6 @@ describe('PollingLoop', () => {
     await Bun.sleep(10);
     await loop.stop();
 
-    expect(ticks).toBe(1); // um laço só
+    expect(ticks).toBe(1);
   });
 });

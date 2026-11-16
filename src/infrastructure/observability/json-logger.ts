@@ -6,35 +6,17 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 
 const SEVERITY: Readonly<Record<LogLevel, number>> = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 };
 
-/** Campos que o chamador não pode sobrescrever. */
 const RESERVED = new Set(['timestamp', 'level', 'message']);
 
-/**
- * Nomes de campo que nunca são logados, mesmo que alguém passe por engano:
- * valores financeiros, payloads inteiros e credenciais.
- */
 const FORBIDDEN_FIELD = /amount|balance|money|payload|body|authorization|password|secret|token/i;
 const OMITTED = '[omitido]';
 
 export interface JsonLoggerOptions {
-  /** Nível mínimo que é escrito. `silent` não escreve nada. */
   level: LogLevel;
-  /** Campos fixos de toda linha (serviço, instância). */
   base?: Readonly<Record<string, string | number>>;
-  /** Destino das linhas. Padrão: stdout, uma linha por evento. */
   write?: (line: string) => void;
 }
 
-/**
- * Log estruturado: UMA linha JSON por evento, com os campos no nível raiz
- * (`correlationId`, `transactionId`... são chaves diretas, fáceis de filtrar).
- *
- *   {"timestamp":"...","level":"info","message":"transação processada","service":"...","correlationId":"...",...}
- *
- * Duas proteções contra vazar dado financeiro:
- *  - só valores escalares são aceitos: um objeto (o payload) vira "[omitido]";
- *  - campos com nome de valor financeiro ou credencial viram "[omitido]".
- */
 export class JsonLogger implements AppLogger {
   private readonly threshold: number;
   private readonly base: Readonly<Record<string, string | number>>;
@@ -86,12 +68,6 @@ function isScalar(value: unknown): value is string | number | boolean {
   return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
-/**
- * Faz os logs do próprio Nest (inicialização, rotas mapeadas, erros do
- * framework) saírem pelo mesmo JsonLogger, para o stdout do processo ter um
- * formato só. O Nest passa o contexto (nome da classe) como último argumento
- * e, em `error`, o stack antes dele.
- */
 export class NestLoggerAdapter implements LoggerService {
   constructor(private readonly logger: JsonLogger) {}
 

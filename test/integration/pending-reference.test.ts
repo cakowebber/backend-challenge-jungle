@@ -11,22 +11,11 @@ import { loadEnv } from '../../src/infrastructure/config/env';
 import { startTestApp, type TestApp, type WalletJson } from '../support/test-app';
 import { eventually, TestQueues } from '../support/test-queues';
 
-/**
- * REFUND/ROLLBACK que chegam antes da transação referenciada, contra Postgres
- * e LocalStack REAIS.
- *
- * O worker é o código de produção, montado com as portas reais da aplicação.
- * A única coisa trocada é o relógio: em vez de dormir os segundos do backoff,
- * o teste adianta a hora que o worker enxerga. Um bloco no fim roda o worker
- * em segundo plano com o relógio de verdade.
- */
-
 const BASE_DELAY_MS = 10_000;
 const MAX_DELAY_MS = 40_000;
 const MAX_ATTEMPTS = 3;
 const BATCH = 20;
 
-/** Relógio que anda quando o teste manda. */
 class TestClock implements Clock {
   private offsetMs = 0;
 
@@ -62,7 +51,7 @@ beforeAll(async () => {
   app = await startTestApp('pending_reference', {
     eventsQueueUrl: queues.eventsUrl,
     pendingReference: {
-      enabled: false, // os testes disparam os ciclos na mão
+      enabled: false,
       pollIntervalMs: 50,
       batchSize: BATCH,
       retryBaseDelayMs: BASE_DELAY_MS,
@@ -73,7 +62,6 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  // Pendências deixadas por testes anteriores saem do caminho; cada teste começa com o relógio na hora real.
   await app.sql`
     UPDATE wager_transactions SET next_reference_attempt_at = now() + interval '10 years'
      WHERE status = 'PENDING_REFERENCE'`;
@@ -85,8 +73,6 @@ afterAll(async () => {
   await app.close();
   await queues.destroy();
 });
-
-// ---- apoio
 
 const BRL = (amount: string) => ({ amount, currency: 'BRL' });
 
@@ -105,7 +91,6 @@ async function stored(transactionId: string): Promise<StoredTransaction> {
   return row as StoredTransaction;
 }
 
-/** Envia um REFUND/ROLLBACK cuja referência ainda não existe e confere que ficou pendente. */
 async function submitOrphan(wallet: WalletJson, kind: 'REFUND' | 'ROLLBACK', amount: string, reference: string) {
   const payload = app.payload(wallet, kind, amount, { referenceExternalTransactionId: reference });
   const response = await app.submit(payload);
@@ -120,8 +105,6 @@ async function eventPayloads(aggregateId: string) {
   return [...rows] as { event_type: string; payload: Record<string, any> }[];
 }
 
-// ---- testes
-
 describe('a referência chega depois', () => {
   test('REFUND antes da BET: fica pendente, a BET chega e o worker aplica o estorno', async () => {
     const wallet = await app.createWallet('100.00');
@@ -129,13 +112,12 @@ describe('a referência chega depois', () => {
     const refund = await submitOrphan(wallet, 'REFUND', '30.00', reference);
     expect(await app.balanceOf(wallet.id)).toBe('100.00');
 
-    // Antes de vencer a primeira tentativa o worker nem olha para ela.
     expect((await worker.execute(BATCH)).found).toBe(0);
 
     const bet = await app.submit(app.payload(wallet, 'BET', '30.00', { externalTransactionId: reference }));
     expect(bet.status).toBe(201);
     expect(await app.balanceOf(wallet.id)).toBe('70.00');
-    expect((await stored(refund.transactionId)).status).toBe('PENDING_REFERENCE'); // a chegada da BET não resolve sozinha
+    expect((await stored(refund.transactionId)).status).toBe('PENDING_REFERENCE');
 
     clock.advance(BASE_DELAY_MS);
     const result = await worker.execute(BATCH);
@@ -150,24 +132,22 @@ describe('a referência chega depois', () => {
     });
     expect(await app.balanceOf(wallet.id)).toBe('100.00');
     expect(await app.ledgerOf(wallet.id)).toMatchObject([
-      { direction: 'CREDIT', amount: '100.00', balance_after: '100.00' }, // abertura
-      { direction: 'DEBIT', amount: '30.00', balance_after: '70.00' }, // aposta
-      { direction: 'CREDIT', amount: '30.00', balance_before: '70.00', balance_after: '100.00' }, // estorno
+      { direction: 'CREDIT', amount: '100.00', balance_after: '100.00' },
+      { direction: 'DEBIT', amount: '30.00', balance_after: '70.00' },
+      { direction: 'CREDIT', amount: '30.00', balance_before: '70.00', balance_after: '100.00' },
     ]);
     expect(await app.ledgerMatchesBalance(wallet.id)).toBe(true);
 
-    // Eventos: o aviso de pendência da entrada + o desfecho gravado pelo worker.
     const events = await eventPayloads(refund.transactionId);
     expect(events.map((event) => event.event_type)).toEqual([
       'WagerTransactionPendingReference',
       'WagerTransactionProcessed',
     ]);
     const processed = events[1]?.payload as Record<string, any>;
-    expect(processed.causationId).toBe(refund.transactionId); // causa: a própria transação pendente
-    expect(processed.correlationId).not.toBe(events[0]?.payload.correlationId); // correlação nova por resolução
-    expect(await app.eventsOf(wallet.id)).toHaveLength(3); // WalletBalanceChanged: abertura, aposta, estorno
+    expect(processed.causationId).toBe(refund.transactionId);
+    expect(processed.correlationId).not.toBe(events[0]?.payload.correlationId);
+    expect(await app.eventsOf(wallet.id)).toHaveLength(3);
 
-    // Reenviar o mesmo REFUND agora devolve o desfecho final, sem novo efeito.
     const replay = await app.submit(refund.payload);
     expect(replay.status).toBe(201);
     expect(replay.body).toMatchObject({ status: 'PROCESSED', balance: BRL('100.00'), idempotentReplay: true });
@@ -220,23 +200,19 @@ describe('a referência chega depois', () => {
     const reference = `bet-${Bun.randomUUIDv7()}`;
     const refund = await submitOrphan(wallet, 'REFUND', '30.00', reference);
 
-    // 1ª tentativa: nada ainda.
     clock.advance(BASE_DELAY_MS);
     const first = await worker.execute(BATCH);
     expect(first.outcomes.RESCHEDULED).toBe(1);
     const afterFirst = await stored(refund.transactionId);
     expect(afterFirst).toMatchObject({ status: 'PENDING_REFERENCE', reference_attempts: 1 });
     const wait = (afterFirst.next_reference_attempt_at as Date).getTime() - clock.now().getTime();
-    expect(wait).toBeGreaterThan(2 * BASE_DELAY_MS - 1_000); // o backoff dobrou: ~20s
+    expect(wait).toBeGreaterThan(2 * BASE_DELAY_MS - 1_000);
     expect(wait).toBeLessThanOrEqual(2 * BASE_DELAY_MS);
-    // A nova tentativa frustrada não repete o evento de pendência.
     expect(await app.eventsOf(refund.transactionId)).toEqual(['WagerTransactionPendingReference']);
 
-    // Ainda dentro do backoff: o worker não a pega.
     clock.advance(BASE_DELAY_MS);
     expect((await worker.execute(BATCH)).found).toBe(0);
 
-    // A BET chega; na 2ª tentativa o estorno é aplicado.
     await app.submit(app.payload(wallet, 'BET', '30.00', { externalTransactionId: reference }));
     clock.advance(BASE_DELAY_MS);
     expect((await worker.execute(BATCH)).outcomes.RESOLVED).toBe(1);
@@ -251,7 +227,6 @@ describe('a referência nunca chega', () => {
     const reference = `bet-${Bun.randomUUIDv7()}`;
     const refund = await submitOrphan(wallet, 'REFUND', '30.00', reference);
 
-    // 3 tentativas, com 10s, 20s e 40s de espera entre elas.
     clock.advance(BASE_DELAY_MS);
     expect((await worker.execute(BATCH)).outcomes.RESCHEDULED).toBe(1);
     clock.advance(2 * BASE_DELAY_MS);
@@ -269,10 +244,9 @@ describe('a referência nunca chega', () => {
       next_reference_attempt_at: null,
     });
     expect(await app.balanceOf(wallet.id)).toBe('100.00');
-    expect(await app.ledgerOf(wallet.id)).toHaveLength(1); // só a abertura
+    expect(await app.ledgerOf(wallet.id)).toHaveLength(1);
     expect(await app.ledgerMatchesBalance(wallet.id)).toBe(true);
 
-    // O evento de rejeição está na outbox...
     const events = await eventPayloads(refund.transactionId);
     expect(events.map((event) => event.event_type)).toEqual([
       'WagerTransactionPendingReference',
@@ -283,10 +257,8 @@ describe('a referência nunca chega', () => {
       failureCode: 'REFERENCE_NOT_FOUND',
     });
 
-    // ...e o publisher o entrega na fila de eventos.
     const publisher = app.app.get(PublishOutboxBatch);
     while ((await publisher.execute()).claimed > 0) {
-      // drena a outbox
     }
     const published = (await queues.drain(queues.eventsUrl, 1)).map((message) => JSON.parse(message.Body as string));
     const rejection = published.find(
@@ -295,14 +267,13 @@ describe('a referência nunca chega', () => {
     expect(rejection.eventId).toBe(events[1]?.payload.eventId);
     expect(rejection.data.failureCode).toBe('REFERENCE_NOT_FOUND');
 
-    // REJECTED é terminal: a BET chegando depois não ressuscita o estorno.
     await app.submit(app.payload(wallet, 'BET', '30.00', { externalTransactionId: reference }));
     clock.advance(10 * MAX_DELAY_MS);
     expect((await worker.execute(BATCH)).found).toBe(0);
     const replay = await app.submit(refund.payload);
     expect(replay.status).toBe(422);
     expect(replay.body).toMatchObject({ failureCode: 'REFERENCE_NOT_FOUND', idempotentReplay: true });
-    expect(await app.balanceOf(wallet.id)).toBe('70.00'); // só a aposta
+    expect(await app.balanceOf(wallet.id)).toBe('70.00');
   });
 });
 
@@ -332,7 +303,7 @@ describe('a referência chega, mas não serve', () => {
     const reference = `bet-${Bun.randomUUIDv7()}`;
     const refund = await submitOrphan(wallet, 'REFUND', '50.00', reference);
     const bet = await app.submit(app.payload(wallet, 'BET', '50.00', { externalTransactionId: reference }));
-    expect(bet.status).toBe(422); // saldo insuficiente
+    expect(bet.status).toBe(422);
 
     clock.advance(BASE_DELAY_MS);
     await worker.execute(BATCH);
@@ -358,7 +329,7 @@ describe('a referência chega, mas não serve', () => {
     const outcomes = [await stored(first.transactionId), await stored(second.transactionId)];
     expect(outcomes.map((row) => row.status).sort()).toEqual(['PROCESSED', 'REJECTED']);
     expect(outcomes.find((row) => row.status === 'REJECTED')?.failure_code).toBe('REFERENCE_ALREADY_REVERSED');
-    expect(await app.balanceOf(wallet.id)).toBe('100.00'); // devolvido uma vez só
+    expect(await app.balanceOf(wallet.id)).toBe('100.00');
     expect(await app.ledgerMatchesBalance(wallet.id)).toBe(true);
   });
 });
@@ -385,7 +356,6 @@ describe('várias instâncias', () => {
         workerOf(third, clock).execute(BATCH),
       ]);
 
-      // Todas viram as mesmas candidatas; o lock da wallet e a releitura deixam uma só aplicar.
       const total = (outcome: 'RESOLVED' | 'SKIPPED' | 'ERRORED') =>
         results.reduce((sum, result) => sum + result.outcomes[outcome], 0);
       expect(total('RESOLVED')).toBe(8);
@@ -395,7 +365,7 @@ describe('várias instâncias', () => {
       for (const [index, wallet] of wallets.entries()) {
         expect((await stored(refunds[index]?.transactionId as string)).status).toBe('PROCESSED');
         expect(await app.balanceOf(wallet.id)).toBe('100.00');
-        expect(await app.ledgerOf(wallet.id)).toHaveLength(3); // abertura, aposta e UM estorno
+        expect(await app.ledgerOf(wallet.id)).toHaveLength(3);
         expect(await app.ledgerMatchesBalance(wallet.id)).toBe(true);
         expect(await app.eventsOf(refunds[index]?.transactionId as string)).toEqual([
           'WagerTransactionPendingReference',
@@ -418,7 +388,7 @@ describe('worker em segundo plano, com o relógio de verdade', () => {
         ...loadEnv().pendingReference,
         enabled: true,
         pollIntervalMs: 50,
-        retryBaseDelayMs: 200, // 200ms, 400ms
+        retryBaseDelayMs: 200,
         retryMaxDelayMs: 400,
         maxAttempts: 2,
       },

@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { abortableSleep, ConsumptionGate } from './consumption-gate';
 
-/** Sono que não espera de verdade, só registra os atrasos pedidos. */
 function recordingSleep() {
   const delays: number[] = [];
   return { delays, sleep: async (ms: number) => void delays.push(ms) };

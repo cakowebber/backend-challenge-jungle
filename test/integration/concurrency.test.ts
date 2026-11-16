@@ -1,14 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { startTestApp, type HttpResult, type TestApp, type WalletJson } from '../support/test-app';
 
-/**
- * Concorrência real: as requisições saem juntas (Promise.all) e são atendidas
- * por conexões diferentes do pool, cada uma na sua transação SQL. Nada aqui é
- * sequencial nem mockado — quem decide o resultado é o Postgres.
- *
- * (Um processo só. Os testes com três ou mais instâncias vêm depois.)
- */
-
 let app: TestApp;
 
 beforeAll(async () => {
@@ -26,7 +18,6 @@ async function debitsOf(walletId: string) {
   return (await app.ledgerOf(walletId)).filter((entry) => entry.direction === 'DEBIT');
 }
 
-/** Cada lançamento começa exatamente onde o anterior terminou: não houve lost update. */
 async function expectUnbrokenLedgerChain(wallet: WalletJson) {
   const ledger = await app.ledgerOf(wallet.id);
   for (let i = 1; i < ledger.length; i++) {
@@ -53,7 +44,7 @@ describe('cenário obrigatório (desafio 8): 100.00 e duas apostas de 80.00 simu
     expect(rejected[0]?.body).toMatchObject({
       status: 'REJECTED',
       failureCode: 'INSUFFICIENT_FUNDS',
-      balance: BRL('20.00'), // a perdedora já enxergou o saldo depois da vencedora
+      balance: BRL('20.00'),
     });
     expect(await app.balanceOf(wallet.id)).toBe('20.00');
     expect(await debitsOf(wallet.id)).toHaveLength(1);
@@ -90,7 +81,6 @@ describe('cenário obrigatório (desafio 8): 100.00 e duas apostas de 80.00 simu
     expect(retries.every((r) => r.body.idempotentReplay === true)).toBe(true);
     expect(countBy(retries, 201)).toBe(3);
     expect(countBy(retries, 422)).toBe(3);
-    // cada retry repete a resposta da sua tentativa original
     for (const [index, retry] of retries.entries()) {
       expect(retry.body.transactionId).toBe(first[index % 2]?.body.transactionId);
     }
@@ -109,7 +99,6 @@ describe('a mesma aposta enviada 50 vezes em paralelo', () => {
     expect(countBy(results, 201)).toBe(50);
     expect(new Set(results.map((r) => r.body.transactionId)).size).toBe(1);
     expect(results.every((r) => r.body.balance.amount === '975.00')).toBe(true);
-    // exatamente uma requisição processou; as outras 49 são replay
     expect(results.filter((r) => r.body.idempotentReplay === false)).toHaveLength(1);
     expect(results.filter((r) => r.body.idempotentReplay === true)).toHaveLength(49);
 
@@ -118,10 +107,9 @@ describe('a mesma aposta enviada 50 vezes em paralelo', () => {
     const [row] = await app.sql`
       SELECT count(*)::int AS n FROM wager_transactions WHERE external_transaction_id = ${payload.externalTransactionId}`;
     expect(row.n).toBe(1);
-    // os eventos também saíram uma vez só
     const transactionId = results[0]?.body.transactionId as string;
     expect(await app.eventsOf(transactionId)).toEqual(['WagerTransactionProcessed']);
-    expect(await app.eventsOf(wallet.id)).toEqual(['WalletBalanceChanged', 'WalletBalanceChanged']); // abertura + aposta
+    expect(await app.eventsOf(wallet.id)).toEqual(['WalletBalanceChanged', 'WalletBalanceChanged']);
     await expectUnbrokenLedgerChain(wallet);
   });
 
@@ -179,7 +167,6 @@ describe('wallet disputada por muitas operações diferentes', () => {
     expect(results.filter((r) => r.status === 422).every((r) => r.body.failureCode === 'INSUFFICIENT_FUNDS')).toBe(true);
     expect(await app.balanceOf(wallet.id)).toBe('0.00');
     expect(await debitsOf(wallet.id)).toHaveLength(10);
-    // os saldos observados pelas 10 vencedoras são todos distintos: 90, 80, ... 0
     const observed = results.filter((r) => r.status === 201).map((r) => r.body.balance.amount).sort();
     expect(new Set(observed).size).toBe(10);
     expect((await app.get(`/wallets/${wallet.id}`)).body.version).toBe(11);
@@ -194,7 +181,7 @@ describe('wallet disputada por muitas operações diferentes', () => {
       ...Array.from({ length: 20 }, () => app.submit(app.payload(wallet, 'BET', '5.00'))),
     ]);
 
-    expect(countBy(results, 201)).toBe(40); // saldo inicial cobre todas as apostas em qualquer ordem
+    expect(countBy(results, 201)).toBe(40);
     expect(await app.balanceOf(wallet.id)).toBe('100.00');
     expect(await app.ledgerOf(wallet.id)).toHaveLength(41);
     expect((await app.get(`/wallets/${wallet.id}`)).body.version).toBe(41);
@@ -216,7 +203,7 @@ describe('wallet disputada por muitas operações diferentes', () => {
     expect(countBy(results, 201)).toBe(1);
     expect(countBy(results, 422)).toBe(9);
     expect(results.filter((r) => r.status === 422).every((r) => r.body.failureCode === 'REFERENCE_ALREADY_REVERSED')).toBe(true);
-    expect(await app.balanceOf(wallet.id)).toBe('100.00'); // e não 140.00, 180.00...
+    expect(await app.balanceOf(wallet.id)).toBe('100.00');
     await expectUnbrokenLedgerChain(wallet);
   });
 });
@@ -246,7 +233,6 @@ describe('wallets distintas em paralelo', () => {
     let locked!: () => void;
     const lockTaken = new Promise<void>((resolve) => (locked = resolve));
 
-    // Outra sessão segura o lock da primeira wallet.
     const holder = app.sql.begin(async (tx) => {
       await tx`SELECT id FROM wallets WHERE id = ${(blocked as WalletJson).id} FOR UPDATE`;
       locked();
@@ -266,8 +252,8 @@ describe('wallets distintas em paralelo', () => {
 
     expect(onFree.status).toBe(201);
     expect(elapsed).toBeLessThan(1000);
-    expect(stillWaiting).toBe(true); // a da wallet travada ficou esperando o lock...
-    expect((await onBlocked).status).toBe(201); // ...e passou assim que ele foi solto
+    expect(stillWaiting).toBe(true);
+    expect((await onBlocked).status).toBe(201);
   });
 });
 
@@ -291,7 +277,6 @@ describe('espera pelo lock tem limite', () => {
   let impatient: TestApp;
 
   beforeAll(async () => {
-    // Mesma aplicação, com lock_timeout curto para o teste não demorar.
     impatient = await startTestApp('concurrency_lock_timeout', { databaseLockTimeoutMs: 300 });
   });
 

@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { InvalidRequestError } from '../../application/errors';
 import { parseWagerMessage, WAGER_CONSUMER_NAME } from './wager-message';
 
-/** A mensagem de exemplo do desafio (seção 10). */
 const example = {
   messageId: 'msg-123',
   type: 'WagerTransactionRequested',

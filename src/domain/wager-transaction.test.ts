@@ -120,7 +120,6 @@ describe('WagerTransaction.opening', () => {
 });
 
 describe('WagerTransaction — tabela de transições', () => {
-  /** Transação com referência declarada, colocada no estado de origem como se viesse do banco. */
   function inStatus(status: Status): WagerTransaction {
     return persisted({
       kind: Kind.Refund,
@@ -138,7 +137,6 @@ describe('WagerTransaction — tabela de transições', () => {
     fail: (tx) => tx.fail(InfrastructureFailureCode.ProcessingFailed),
   };
 
-  // undefined = transição inválida (InvalidTransactionStateError)
   const table: [from: Status, method: string, to: Status | undefined][] = [
     [Status.Pending, 'markProcessed', Status.Processed],
     [Status.Pending, 'markPendingReference', Status.PendingReference],
@@ -319,7 +317,6 @@ describe('WagerTransaction — idempotency key com payload divergente', () => {
 
 describe('WagerTransaction.rehydrate', () => {
   test('reconstrói qualquer estado sem revalidar regras de criação ou de transição', () => {
-    // OPENING terminal, com provider interno e valor zero: tudo que `create` recusaria.
     const tx = persisted({
       kind: Kind.Opening,
       providerId: INTERNAL_PROVIDER_ID,

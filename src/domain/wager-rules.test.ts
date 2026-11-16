@@ -38,17 +38,14 @@ function apply(
   });
 }
 
-/** BET já aplicada, pronta para ser referenciada. */
 function processedBet(amount = '25.00', externalTransactionId = 'bet-1') {
   return persisted({ kind: Kind.Bet, money: brl(amount), externalTransactionId });
 }
 
-/** REFUND ou ROLLBACK apontando para `bet-1` (ou outra referência). */
 function reversal(kind: Kind.Refund | Kind.Rollback, amount = '25.00', referenceExternalTransactionId = 'bet-1') {
   return submitted(kind, brl(amount), { referenceExternalTransactionId });
 }
 
-/** Garante que uma rejeição não deixou rastro financeiro. */
 function expectRejectedWithoutEffect(
   wallet: Wallet,
   tx: WagerTransaction,
@@ -139,7 +136,6 @@ describe('WIN', () => {
 
     expect(win.status).toBe(Status.Processed);
     expect(win.referenceTransactionId).toBe(bet.id);
-    // WIN não precisa ter o mesmo valor da aposta
     expect(wallet.balance.toJSON().amount).toBe('1275.00');
   });
 
@@ -304,7 +300,6 @@ describe('ROLLBACK', () => {
   });
 
   test('que deixaria o saldo negativo: REVERSAL_WOULD_OVERDRAW, distinto de INSUFFICIENT_FUNDS', () => {
-    // O jogador ganhou 50.00 e já apostou quase tudo; reverter o WIN negativaria.
     const wallet = walletWith(brl('10.00'));
     const win = persisted({ kind: Kind.Win, money: brl('50.00'), externalTransactionId: 'win-1' });
     const rollback = reversal(Kind.Rollback, '50.00', 'win-1');
@@ -370,9 +365,8 @@ describe('referência fora de ordem (desafio 7.1)', () => {
   test('quando a referência chega, a nova tentativa aplica o efeito', () => {
     const wallet = walletWith(brl('100.00'));
     const refund = reversal(Kind.Refund);
-    apply(wallet, refund); // BET ainda não chegou
+    apply(wallet, refund);
 
-    // a BET chega e é processada; o worker tenta de novo
     const bet = submitted(Kind.Bet, brl('25.00'), { externalTransactionId: 'bet-1' });
     apply(wallet, bet);
     const { ledgerEntry } = apply(wallet, refund, { reference: bet });
@@ -427,7 +421,6 @@ describe('referência fora de ordem (desafio 7.1)', () => {
       status: Status.PendingReference,
       processedAt: undefined,
     });
-    // REFUND não pode referenciar outro REFUND: não adianta esperar.
     const refund = reversal(Kind.Refund, '25.00', 'refund-1');
 
     const result = apply(wallet, refund, { reference: refundPendente });
@@ -462,7 +455,6 @@ describe('wallet da operação', () => {
 
   test('wallet de outro player é rejeitada antes de qualquer outra regra', () => {
     const wallet = walletWith(brl('100.00'));
-    // também está em outra moeda e sem saldo: o código que vence é o do player
     const bet = submitted(Kind.Bet, usd('9999.00'), { playerId: 'player-2' });
 
     const result = apply(wallet, bet);
@@ -507,13 +499,13 @@ describe('invariante final: saldo == ledger', () => {
       return tx;
     };
 
-    const bet1 = run(submitted(Kind.Bet, brl('80.00'), { externalTransactionId: 'b1' })); // 20.00
-    run(submitted(Kind.Bet, brl('80.00'))); // rejeitada
-    const win = run(submitted(Kind.Win, brl('200.00'), { externalTransactionId: 'w1' })); // 220.00
-    run(submitted(Kind.Loss, brl('10.00'))); // sem efeito
-    run(reversal(Kind.Refund, '80.00', 'b1'), { reference: bet1 }); // 300.00
-    run(reversal(Kind.Rollback, '200.00', 'w1'), { reference: win }); // 100.00
-    run(reversal(Kind.Rollback, '80.00', 'b1'), { reference: bet1, referenceAlreadyReversed: true }); // rejeitada
+    const bet1 = run(submitted(Kind.Bet, brl('80.00'), { externalTransactionId: 'b1' }));
+    run(submitted(Kind.Bet, brl('80.00')));
+    const win = run(submitted(Kind.Win, brl('200.00'), { externalTransactionId: 'w1' }));
+    run(submitted(Kind.Loss, brl('10.00')));
+    run(reversal(Kind.Refund, '80.00', 'b1'), { reference: bet1 });
+    run(reversal(Kind.Rollback, '200.00', 'w1'), { reference: win });
+    run(reversal(Kind.Rollback, '80.00', 'b1'), { reference: bet1, referenceAlreadyReversed: true });
 
     const fromLedger = ledger.reduce((total, entry) => total.add(entry.signedAmount()), brl('100.00'));
     expect(wallet.balance.toJSON().amount).toBe('100.00');

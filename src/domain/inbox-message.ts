@@ -15,10 +15,6 @@ export interface ReceiveInboxProps {
   receivedAt: Date;
 }
 
-/**
- * Registro de uma mensagem recebida da fila. A identidade é
- * (consumerName, messageId): é ela que o banco usa para barrar redelivery.
- */
 export class InboxMessage {
   private constructor(
     public readonly messageId: string,

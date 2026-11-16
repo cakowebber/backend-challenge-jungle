@@ -4,17 +4,9 @@ import { WagerTransactionKind } from '../domain/wager-transaction';
 import { InvalidRequestError, type FieldError } from './errors';
 import type { InboxReference, ProcessWagerTransactionCommand } from './process-wager-transaction';
 
-/**
- * Validação de entrada escrita à mão (sem class-validator/zod, para não sair
- * da stack). Compartilhada pelas duas portas de entrada — HTTP e fila —, que
- * recebem o mesmo payload de transação. Cada parser devolve o comando tipado
- * ou lança InvalidRequestError com TODOS os problemas encontrados, por campo.
- */
-
 const MAX_TEXT_LENGTH = 255;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Kinds que um provedor pode submeter. OPENING é interno. */
 const SUBMITTABLE_KINDS: readonly string[] = Object.values(WagerTransactionKind).filter(
   (kind) => kind !== WagerTransactionKind.Opening,
 );
@@ -77,17 +69,12 @@ export function money(value: unknown, field: string, problems: Problems): Money 
 
 export interface WagerTransactionInputMetadata {
   idempotencyKey: unknown;
-  /** Como a idempotency key se chama nesta porta de entrada (para a mensagem de erro). */
   idempotencyKeyField: string;
   correlationId: string;
   causationId: string | undefined;
   inbox: InboxReference | undefined;
 }
 
-/**
- * Payload de uma transação: o corpo de POST /wagering/transactions e o `data`
- * da mensagem da fila têm os mesmos campos de negócio.
- */
 export function parseWagerTransactionInput(
   input: unknown,
   metadata: WagerTransactionInputMetadata,

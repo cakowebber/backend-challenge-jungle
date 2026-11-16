@@ -6,8 +6,6 @@ import { WagerTransactionStatus, type WagerTransaction } from '../../domain/wage
 import type { Wallet } from '../../domain/wallet';
 import type { WalletLedgerEntry } from '../../domain/wallet-ledger-entry';
 
-/** Domínio -> JSON da API. Dinheiro sai sempre como { amount: "25.00", currency }. */
-
 export function presentWallet(wallet: Wallet) {
   return {
     id: wallet.id,
@@ -20,17 +18,11 @@ export function presentWallet(wallet: Wallet) {
 export interface SubmissionResponse {
   transactionId: string;
   status: WagerTransactionStatus;
-  /** Saldo observado quando a transação foi resolvida — o mesmo em qualquer replay. */
   balance: MoneyProps | null;
   failureCode?: string;
   idempotentReplay: boolean;
 }
 
-/**
- * Resposta de POST /wagering/transactions. É montada só a partir do que está
- * gravado na transação, então um replay devolve exatamente o mesmo corpo
- * (com idempotentReplay: true).
- */
 export function presentSubmission(result: ProcessWagerTransactionResult): SubmissionResponse {
   const { transaction } = result;
   return {
@@ -42,10 +34,6 @@ export function presentSubmission(result: ProcessWagerTransactionResult): Submis
   };
 }
 
-/**
- * Status HTTP derivado do estado gravado — por isso o replay repete o status:
- *   PROCESSED -> 201 · PENDING_REFERENCE -> 202 · REJECTED -> 422 · FAILED -> 500
- */
 export function statusCodeFor(status: WagerTransactionStatus): number {
   switch (status) {
     case WagerTransactionStatus.Processed:

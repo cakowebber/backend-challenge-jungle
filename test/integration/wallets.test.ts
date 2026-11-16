@@ -54,7 +54,6 @@ describe('POST /wallets', () => {
       balance_before: '0.00',
       balance_after: '1000.00',
     });
-    // xmin é o id da transação do Postgres que gravou cada linha: as três vieram da mesma.
     expect(opening.tx).toBe(row.tx);
     expect(entry.tx).toBe(row.tx);
     expect(await app.eventsOf(wallet.id)).toEqual(['WalletBalanceChanged']);
@@ -131,7 +130,6 @@ describe('GET /wallets/:walletId', () => {
 });
 
 describe('GET /wallets/:walletId/ledger', () => {
-  /** Wallet com 6 lançamentos: abertura de 100.00 e cinco apostas de 10.00. */
   async function walletWithHistory() {
     const wallet = await app.createWallet('100.00');
     for (let i = 0; i < 5; i++) {
@@ -186,13 +184,13 @@ describe('GET /wallets/:walletId/ledger', () => {
     const first = await app.get(`/wallets/${wallet.id}/ledger?limit=4`);
     const cursor = first.body.nextCursor as string;
 
-    await app.submit(app.payload(wallet, 'WIN', '5.00')); // chega um lançamento novo entre as páginas
+    await app.submit(app.payload(wallet, 'WIN', '5.00'));
     const second = await app.get(`/wallets/${wallet.id}/ledger?limit=4&cursor=${cursor}`);
     const firstAgain = await app.get(`/wallets/${wallet.id}/ledger?limit=4`);
 
     expect(after(first.body.items)).toEqual(['100.00', '90.00', '80.00', '70.00']);
     expect(after(second.body.items)).toEqual(['60.00', '50.00', '55.00']);
-    expect(after(firstAgain.body.items)).toEqual(after(first.body.items)); // a página já lida não muda
+    expect(after(firstAgain.body.items)).toEqual(after(first.body.items));
   });
 
   test('o cursor não expõe a posição interna em texto claro', async () => {
@@ -225,8 +223,8 @@ describe('POST /wallets/:walletId/reconciliation', () => {
   test('wallet íntegra: consistent true, com o contrato do desafio', async () => {
     const wallet = await app.createWallet('1000.00');
     await app.submit(app.payload(wallet, 'BET', '25.00'));
-    await app.submit(app.payload(wallet, 'LOSS', '25.00')); // não gera lançamento
-    await app.submit(app.payload(wallet, 'BET', '9999.00')); // rejeitada: não gera lançamento
+    await app.submit(app.payload(wallet, 'LOSS', '25.00'));
+    await app.submit(app.payload(wallet, 'BET', '9999.00'));
 
     const response = await app.post(`/wallets/${wallet.id}/reconciliation`);
 
@@ -256,8 +254,6 @@ describe('POST /wallets/:walletId/reconciliation', () => {
 
   test('divergência é sinalizada na resposta e na métrica, e NÃO é corrigida', async () => {
     const wallet = await app.createWallet('100.00');
-    // Corrompe o saldo por fora da aplicação. Só é possível desligando, como dono
-    // da tabela, o trigger que confere saldo x ledger no commit.
     await app.sql.begin(async (tx) => {
       await tx`ALTER TABLE wallets DISABLE TRIGGER wallets_balance_matches_ledger`;
       await tx`UPDATE wallets SET balance = 95.00 WHERE id = ${wallet.id}`;
@@ -277,7 +273,7 @@ describe('POST /wallets/:walletId/reconciliation', () => {
       checkedEntries: 1,
     });
     expect(app.metrics.value(MetricName.ReconciliationDivergences)).toBe(divergencesBefore + 1);
-    expect(await app.balanceOf(wallet.id)).toBe('95.00'); // segue divergente: nada foi "consertado"
+    expect(await app.balanceOf(wallet.id)).toBe('95.00');
   });
 
   test('wallet inexistente: 404', async () => {

@@ -10,7 +10,6 @@ import { LedgerDirection, WalletLedgerEntry } from './wallet-ledger-entry';
 export interface WalletState {
   id: string;
   playerId: string;
-  /** A moeda da wallet é a moeda do saldo. */
   balance: Money;
   version: number;
   createdAt: Date;
@@ -22,18 +21,15 @@ export interface OpenWalletProps {
   playerId: string;
   initialBalance: Money;
   at: Date;
-  /** Ids da transação OPENING e do seu lançamento. Só são usados se o saldo inicial for positivo. */
   openingTransactionId: string;
   openingEntryId: string;
 }
 
 export interface WalletOpening {
   wallet: Wallet;
-  /** Lançamento CREDIT do saldo inicial; undefined quando a wallet abre zerada. */
   openingEntry: WalletLedgerEntry | undefined;
 }
 
-/** Uma movimentação de saldo, sempre ligada à transação que a causou. */
 export interface WalletMovement {
   entryId: string;
   transactionId: string;
@@ -41,11 +37,6 @@ export interface WalletMovement {
   at: Date;
 }
 
-/**
- * Aggregate root. O saldo só muda por `debit`/`credit`, e cada um devolve o
- * lançamento de ledger correspondente: não existe forma de mover saldo sem
- * produzir o lançamento, nem de produzir o lançamento sem mover o saldo.
- */
 export class Wallet {
   private constructor(
     public readonly id: string,
@@ -57,11 +48,6 @@ export class Wallet {
     private _updatedAt: Date,
   ) {}
 
-  /**
-   * Abre a wallet já com o saldo inicial e version 1. O crédito de abertura faz
-   * parte da criação, por isso não incrementa a versão — mas gera lançamento,
-   * para o ledger explicar todo o saldo desde o primeiro centavo.
-   */
   static open(props: OpenWalletProps): WalletOpening {
     requireNonEmpty('id', props.id);
     requireNonEmpty('playerId', props.playerId);
@@ -89,7 +75,6 @@ export class Wallet {
     return { wallet, openingEntry };
   }
 
-  /** Reconstrução a partir da persistência — não revalida transições. */
   static rehydrate(state: WalletState): Wallet {
     return new Wallet(
       state.id,
@@ -114,13 +99,11 @@ export class Wallet {
     return this._updatedAt;
   }
 
-  /** Há saldo para debitar este valor? As regras consultam antes de decidir rejeitar. */
   canDebit(money: Money): boolean {
     this.assertSameCurrency(money);
     return !this._balance.isLessThan(money);
   }
 
-  /** Lança InsufficientFundsError se o saldo ficaria negativo — o estado não muda. */
   debit(movement: WalletMovement): WalletLedgerEntry {
     this.assertMovable(movement.money);
     if (!this.canDebit(movement.money)) {
@@ -134,10 +117,6 @@ export class Wallet {
     return this.apply(LedgerDirection.Credit, movement, this._balance.add(movement.money));
   }
 
-  /**
-   * Único ponto que altera saldo. O lançamento é criado ANTES de mutar o estado:
-   * se ele for inválido, a wallet permanece intacta.
-   */
   private apply(direction: LedgerDirection, movement: WalletMovement, balanceAfter: Money): WalletLedgerEntry {
     const entry = WalletLedgerEntry.create({
       id: movement.entryId,

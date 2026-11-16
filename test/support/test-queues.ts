@@ -11,17 +11,11 @@ import {
 import { requireEnv } from '../../src/infrastructure/config/env';
 import type { TransactionPayload } from './test-app';
 
-/**
- * Filas FIFO reais no LocalStack, um par (principal + DLQ com redrive policy)
- * por arquivo de teste, para os testes não disputarem mensagens entre si nem
- * com a fila de desenvolvimento.
- */
 export class TestQueues {
   private constructor(
     private readonly sqs: SQSClient,
     readonly queueUrl: string,
     readonly dlqUrl: string,
-    /** Fila FIFO de saída, onde o outbox publisher publica os eventos. */
     readonly eventsUrl: string,
   ) {}
 
@@ -57,7 +51,6 @@ export class TestQueues {
     }
   }
 
-  /** Envia um corpo cru. Cada envio é uma mensagem SQS nova (id de deduplicação único). */
   async sendRaw(body: string, group = 'default'): Promise<string> {
     const result = await this.sqs.send(
       new SendMessageCommand({
@@ -70,7 +63,6 @@ export class TestQueues {
     return result.MessageId as string;
   }
 
-  /** Envia uma mensagem WagerTransactionRequested bem formada. Devolve o messageId do corpo. */
   async send(
     payload: TransactionPayload,
     options: { messageId?: string; idempotencyKey?: string; group?: string } = {},
@@ -80,7 +72,6 @@ export class TestQueues {
     return messageId;
   }
 
-  /** Recebe direto da fila, sem passar pelo consumer (ex.: para simular um worker que morre). */
   async receive(queueUrl: string, options: { waitSeconds?: number; visibilitySeconds?: number } = {}): Promise<Message[]> {
     const result = await this.sqs.send(
       new ReceiveMessageCommand({
@@ -95,7 +86,6 @@ export class TestQueues {
     return result.Messages ?? [];
   }
 
-  /** Lê e REMOVE as mensagens visíveis da fila (para conferir a DLQ sem deixar restos para o próximo teste). */
   async drain(queueUrl: string, waitSeconds = 2): Promise<Message[]> {
     const drained: Message[] = [];
     for (;;) {
@@ -110,7 +100,6 @@ export class TestQueues {
     }
   }
 
-  /** Mensagens na fila: visíveis + em processamento. */
   async depth(queueUrl: string): Promise<number> {
     const { Attributes } = await this.sqs.send(
       new GetQueueAttributesCommand({
@@ -149,7 +138,6 @@ export function wagerMessageBody(
   });
 }
 
-/** Espera uma condição assíncrona ficar verdadeira, sondando. Falha com a descrição se o prazo estourar. */
 export async function eventually(
   description: string,
   condition: () => Promise<boolean>,

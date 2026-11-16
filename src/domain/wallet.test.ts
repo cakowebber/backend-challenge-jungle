@@ -22,7 +22,6 @@ function movement(money: Money, n = 1) {
   return { entryId: `entry-${n}`, transactionId: `tx-${n}`, money, at: LATER };
 }
 
-/** Saldo reconstruído pelo ledger: soma dos créditos menos os débitos. */
 function balanceFromLedger(entries: readonly WalletLedgerEntry[], currency: string): Money {
   return entries.reduce((total, entry) => total.add(entry.signedAmount()), Money.zero(currency));
 }
@@ -158,7 +157,6 @@ describe('Wallet — saldo e ledger andam juntos', () => {
 
     expect(wallet.balance.toJSON().amount).toBe('250.24');
     expect(balanceFromLedger(ledger, 'BRL').equals(wallet.balance)).toBe(true);
-    // version 1 na abertura + uma por movimentação aplicada (a rejeitada não conta)
     expect(wallet.version).toBe(5);
     expect(ledger).toHaveLength(5);
   });

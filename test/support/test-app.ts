@@ -9,12 +9,6 @@ import { NestLoggerAdapter, type JsonLogger } from '../../src/infrastructure/obs
 import type { PrometheusMetrics } from '../../src/infrastructure/observability/prometheus-metrics';
 import { openOrm, recreateTestDatabase } from './test-database';
 
-/**
- * A aplicação Nest REAL (mesmo AppModule do main.ts), ouvindo numa porta
- * livre e apontada para um Postgres real com banco próprio. Os testes falam
- * com ela por HTTP, como um provedor faria.
- */
-
 export interface HttpResult<T = any> {
   status: number;
   body: T;
@@ -53,15 +47,9 @@ export interface LedgerRow {
   transaction_id: string;
 }
 
-/**
- * Cliente de uma instância da aplicação: fala com ela por HTTP e confere o
- * resultado direto no banco. Serve tanto para a app embutida no processo do
- * teste (TestApp) quanto para uma instância rodando em outro processo.
- */
 export class ApiClient {
   constructor(
     readonly baseUrl: string,
-    /** Conexão direta ao banco de teste, para conferir o que foi (ou não) gravado. */
     readonly sql: SQL,
   ) {}
 
@@ -89,7 +77,6 @@ export class ApiClient {
     return this.request('POST', path, { body, ...(headers === undefined ? {} : { headers }) });
   }
 
-  /** Cria uma wallet nova (player aleatório) e devolve o JSON dela. */
   async createWallet(amount = '100.00', currency = 'BRL'): Promise<WalletJson> {
     const result = await this.post('/wallets', {
       playerId: Bun.randomUUIDv7(),
@@ -101,7 +88,6 @@ export class ApiClient {
     return result.body as WalletJson;
   }
 
-  /** Payload válido de transação para a wallet, com id externo único. */
   payload(wallet: WalletJson, kind: string, amount: string, overrides: Partial<TransactionPayload> = {}): TransactionPayload {
     return {
       providerId: 'provider-a',
@@ -116,7 +102,6 @@ export class ApiClient {
     };
   }
 
-  /** POST /wagering/transactions. A idempotency key padrão é a recomendada pelo desafio. */
   submit(payload: TransactionPayload, idempotencyKey?: string): Promise<HttpResult> {
     return this.post('/wagering/transactions', payload, {
       'idempotency-key': idempotencyKey ?? `${payload.providerId}:${payload.externalTransactionId}`,
@@ -128,15 +113,13 @@ export class ApiClient {
     return row.balance as string;
   }
 
-  /** Lançamentos da wallet em ordem, lidos direto do banco. */
   async ledgerOf(walletId: string): Promise<LedgerRow[]> {
     const rows = await this.sql`
       SELECT direction, amount::text, balance_before::text, balance_after::text, transaction_id
         FROM wallet_ledger_entries WHERE wallet_id = ${walletId} ORDER BY seq`;
-    return [...rows]; // array comum, sem os metadados do cliente SQL
+    return [...rows];
   }
 
-  /** Invariante final de todos os testes: saldo gravado == saldo reconstruído pelo ledger. */
   async ledgerMatchesBalance(walletId: string): Promise<boolean> {
     const [row] = await this.sql`
       SELECT w.balance = COALESCE(
@@ -151,7 +134,6 @@ export class ApiClient {
       SELECT event_type FROM outbox_messages WHERE aggregate_id = ${aggregateId} ORDER BY event_type`;
     return rows.map((row: { event_type: string }) => row.event_type);
   }
-
 }
 
 export class TestApp extends ApiClient {
@@ -164,10 +146,6 @@ export class TestApp extends ApiClient {
     super(baseUrl, sql);
   }
 
-  /**
-   * Sobe OUTRA instância da aplicação sobre o mesmo banco (pool próprio), como
-   * uma segunda réplica faria. Quem chama fecha a instância com close().
-   */
   startSibling(overrides: Partial<Env> = {}): Promise<TestApp> {
     return bootApp({ ...this.env, ...overrides });
   }
@@ -195,10 +173,7 @@ export async function startTestApp(suite: string, overrides: Partial<Env> = {}):
   return bootApp({
     ...base,
     databaseUrl,
-    // TEST_LOGS=1 liga os logs da aplicação para depurar um teste.
     logLevel: process.env.TEST_LOGS === '1' ? base.logLevel : 'silent',
-    // Por padrão os testes não consomem fila nem rodam workers em segundo
-    // plano; os testes de mensageria ligam o que precisam, com filas próprias.
     consumer: { ...base.consumer, enabled: false },
     outbox: { ...base.outbox, enabled: false },
     pendingReference: { ...base.pendingReference, enabled: false },
@@ -207,7 +182,6 @@ export async function startTestApp(suite: string, overrides: Partial<Env> = {}):
 }
 
 async function bootApp(env: Env): Promise<TestApp> {
-  // Como no main.ts: os logs do Nest saem pelo logger da aplicação (silencioso por padrão nos testes).
   const app = await NestFactory.create(AppModule.forRoot(env), { bufferLogs: true });
   app.useLogger(new NestLoggerAdapter(app.get<JsonLogger>(APP_LOGGER)));
   await app.listen(0, '127.0.0.1');

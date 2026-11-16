@@ -61,7 +61,7 @@ describe('Money.from — entradas inválidas', () => {
 describe('Money — aritmética exata', () => {
   test('0.10 + 0.20 é exatamente 0.30 (o caso que quebra com float)', () => {
     expect(brl('0.10').add(brl('0.20')).toJSON().amount).toBe('0.30');
-    expect(0.1 + 0.2).not.toBe(0.3); // por isso não usamos number
+    expect(0.1 + 0.2).not.toBe(0.3);
   });
 
   test('soma e subtração preservam a escala de 2 casas', () => {

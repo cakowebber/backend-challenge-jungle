@@ -17,15 +17,7 @@ import type {
   WalletRecord,
 } from './records';
 
-/**
- * Conversão registro <-> domínio. A volta do banco usa sempre `rehydrate`,
- * que reconstrói o estado sem revalidar regras de transição.
- * Os valores de kind/status/direction são garantidos pelos CHECKs do schema.
- */
-
 const money = (amount: string, currency: string): Money => Money.from({ amount, currency });
-
-// ---- Wallet
 
 export function walletToRecord(wallet: Wallet): WalletRecord {
   return {
@@ -50,9 +42,6 @@ export function walletFromRecord(record: WalletRecord): Wallet {
   });
 }
 
-// ---- WagerTransaction
-
-/** Campos que mudam ao longo da vida da transação; os demais são imutáveis (e o banco garante). */
 export function transactionOutcomeToRecord(
   transaction: WagerTransaction,
 ): Pick<
@@ -128,8 +117,6 @@ export function transactionFromRecord(record: WagerTransactionRecord): WagerTran
   });
 }
 
-// ---- WalletLedgerEntry
-
 export function ledgerEntryToRecord(entry: WalletLedgerEntry): LedgerEntryRecord {
   const value = entry.money.toJSON();
   return {
@@ -158,8 +145,6 @@ export function ledgerEntryFromRecord(record: LedgerEntryRecord): WalletLedgerEn
   });
 }
 
-// ---- OutboxMessage
-
 export function outboxMessageToRecord(message: OutboxMessage): OutboxMessageRecord {
   return {
     id: message.id,
@@ -185,8 +170,6 @@ export function outboxMessageFromRecord(record: OutboxMessageRecord): OutboxMess
     publishedAt: record.publishedAt ?? undefined,
   });
 }
-
-// ---- InboxMessage
 
 export function inboxMessageToRecord(message: InboxMessage): InboxMessageRecord {
   return {

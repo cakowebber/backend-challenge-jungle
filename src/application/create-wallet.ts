@@ -23,11 +23,6 @@ export interface CreateWalletCommand {
   correlationId: string;
 }
 
-/**
- * Cria a wallet. Com saldo inicial positivo, a transação interna OPENING, o
- * lançamento CREDIT e os eventos são gravados na MESMA transação SQL da wallet:
- * ou existe a wallet com o saldo explicado pelo ledger, ou não existe nada.
- */
 export class CreateWallet {
   constructor(
     private readonly unitOfWork: UnitOfWork,
@@ -53,14 +48,12 @@ export class CreateWallet {
     });
 
     return this.unitOfWork.transactional(async () => {
-      // Quem decide "já existe" é o UNIQUE (player_id, currency), então duas
-      // criações simultâneas não passam as duas.
       const inserted = await this.wallets.insertIfAbsent(wallet);
       if (!inserted) {
         throw new WalletAlreadyExistsError(command.playerId, wallet.currency);
       }
       if (openingEntry === undefined) {
-        return wallet; // abriu zerada: sem saldo, sem lançamento
+        return wallet;
       }
 
       const opening = WagerTransaction.opening({

@@ -10,15 +10,9 @@ export const LEDGER_MAX_LIMIT = 200;
 
 export interface LedgerPage {
   items: WalletLedgerEntry[];
-  /** Passe de volta em `cursor` para a página seguinte; undefined na última. */
   nextCursor: string | undefined;
 }
 
-/**
- * Cursor opaco do ledger: a posição do último lançamento entregue.
- * É estável porque o ledger é append-only e a posição é crescente por wallet:
- * lançamentos novos só aparecem depois do cursor, nunca deslocam páginas já lidas.
- */
 function encodeCursor(position: string): string {
   return Buffer.from(JSON.stringify({ p: position }), 'utf8').toString('base64url');
 }
@@ -31,7 +25,6 @@ function decodeCursor(cursor: string): string {
       return position;
     }
   } catch {
-    // cai no erro abaixo
   }
   throw new InvalidRequestError([{ field: 'cursor', message: 'cursor inválido' }]);
 }
@@ -59,7 +52,6 @@ export class WalletQueries {
         throw new ResourceNotFoundError('Wallet', walletId);
       }
 
-      // Busca um a mais para saber se existe próxima página sem um COUNT.
       const rows = await this.ledger.listByWallet(walletId, { afterPosition, limit: options.limit + 1 });
       const page = rows.slice(0, options.limit);
       const last = page.at(-1);

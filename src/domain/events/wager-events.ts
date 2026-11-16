@@ -6,7 +6,6 @@ import type { Wallet } from '../wallet';
 import type { LedgerDirection, WalletLedgerEntry } from '../wallet-ledger-entry';
 import { IntegrationEvent, type EventContext } from './integration-event';
 
-/** Identificação da transação, comum aos três eventos de transação. */
 interface WagerTransactionEventData {
   transactionId: string;
   providerId: string;
@@ -41,8 +40,6 @@ function assertStatus(transaction: WagerTransaction, expected: WagerTransactionS
   }
 }
 
-// ---- WagerTransactionProcessed: qualquer transação aplicada, inclusive LOSS
-
 export interface WagerTransactionProcessedData extends WagerTransactionEventData {
   referenceTransactionId: string | null;
   processedAt: string;
@@ -66,8 +63,6 @@ export class WagerTransactionProcessed extends IntegrationEvent<WagerTransaction
   }
 }
 
-// ---- WagerTransactionRejected: rejeição por regra de negócio
-
 export interface WagerTransactionRejectedData extends WagerTransactionEventData {
   failureCode: BusinessFailureCode;
 }
@@ -83,14 +78,11 @@ export class WagerTransactionRejected extends IntegrationEvent<WagerTransactionR
       aggregateId: transaction.id,
       data: {
         ...identify(transaction),
-        // REJECTED só é alcançado por reject(), que recebe um código de negócio.
         failureCode: transaction.failureCode as BusinessFailureCode,
       },
     });
   }
 }
-
-// ---- WagerTransactionFailed: erro permanente de infraestrutura (além dos eventos mínimos do desafio)
 
 export interface WagerTransactionFailedData extends WagerTransactionEventData {
   failureCode: InfrastructureFailureCode;
@@ -107,14 +99,11 @@ export class WagerTransactionFailed extends IntegrationEvent<WagerTransactionFai
       aggregateId: transaction.id,
       data: {
         ...identify(transaction),
-        // FAILED só é alcançado por fail(), que recebe um código de infraestrutura.
         failureCode: transaction.failureCode as InfrastructureFailureCode,
       },
     });
   }
 }
-
-// ---- WagerTransactionPendingReference: referência ausente
 
 export interface WagerTransactionPendingReferenceData extends WagerTransactionEventData {
   referenceExternalTransactionId: string;
@@ -132,15 +121,12 @@ export class WagerTransactionPendingReference extends IntegrationEvent<WagerTran
       aggregateId: transaction.id,
       data: {
         ...identify(transaction),
-        // PENDING_REFERENCE só é alcançado por quem declara referência.
         referenceExternalTransactionId: transaction.referenceExternalTransactionId as string,
         nextAttemptAt: transaction.nextReferenceAttemptAt?.toISOString() ?? null,
       },
     });
   }
 }
-
-// ---- WalletBalanceChanged: somente quando o saldo muda
 
 export interface WalletBalanceChangedData {
   walletId: string;
@@ -156,7 +142,6 @@ export class WalletBalanceChanged extends IntegrationEvent<WalletBalanceChangedD
   readonly eventType = 'WalletBalanceChanged';
   readonly version = 1;
 
-  /** Só pode ser construído a partir de um lançamento: sem ledger, sem evento. */
   static from(wallet: Wallet, entry: WalletLedgerEntry, ctx: EventContext): WalletBalanceChanged {
     if (entry.walletId !== wallet.id) {
       throw new DomainInvariantError(`lançamento ${entry.id} não pertence à wallet ${wallet.id}`);

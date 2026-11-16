@@ -18,7 +18,6 @@ export const ROUND_ID = 'round-987';
 export const RETRY_POLICY: ReferenceRetryPolicy = { baseDelayMs: 1_000, maxDelayMs: 60_000, maxAttempts: 3 };
 
 let sequence = 0;
-/** Ids únicos e legíveis para os testes. */
 export function nextId(prefix: string): string {
   sequence += 1;
   return `${prefix}-${sequence}`;
@@ -32,7 +31,6 @@ export function usd(amount: string): Money {
   return Money.from({ amount, currency: 'USD' });
 }
 
-/** Wallet já existente com o saldo informado. */
 export function walletWith(balance: Money, overrides: Partial<WalletState> = {}): Wallet {
   return Wallet.rehydrate({
     id: WALLET_ID,
@@ -45,7 +43,6 @@ export function walletWith(balance: Money, overrides: Partial<WalletState> = {})
   });
 }
 
-/** Transação recém-submetida (PENDING), passando pelas validações de `create`. */
 export function submitted(
   kind: WagerTransactionKind,
   money: Money,
@@ -69,7 +66,6 @@ export function submitted(
   });
 }
 
-/** Transação reconstruída em um estado qualquer, como se viesse do banco. */
 export function persisted(overrides: Partial<WagerTransactionState> = {}): WagerTransaction {
   const externalTransactionId = overrides.externalTransactionId ?? nextId('ext');
   return WagerTransaction.rehydrate({

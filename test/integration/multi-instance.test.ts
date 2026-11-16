@@ -3,16 +3,6 @@ import { Cluster, type ClusterNode } from '../support/cluster';
 import type { ApiClient, HttpResult, TransactionPayload, WalletJson } from '../support/test-app';
 import { eventually, type TestQueues } from '../support/test-queues';
 
-/**
- * 3 instâncias REAIS (3 processos `bun src/main.ts`) sobre o mesmo Postgres e
- * as mesmas filas do LocalStack. Os testes cobrem disputa pela mesma wallet,
- * wallets diferentes, processo morto no meio do fluxo e reinício do serviço.
- *
- * Em TODOS os testes, ao final: para toda wallet do banco, o saldo gravado é
- * igual ao saldo reconstruído pelo ledger, a cadeia de lançamentos é contínua
- * e não há saldo negativo (ver afterEach).
- */
-
 setDefaultTimeout(120_000);
 
 const INSTANCES = 3;
@@ -25,13 +15,11 @@ let queues: TestQueues;
 beforeAll(async () => {
   cluster = await Cluster.start('multi_instance', INSTANCES, {
     DB_POOL_MAX: '10',
-    // A visibilidade da mensagem (5s) tem que ser maior que a espera máxima por um lock (2s):
-    // senão a mensagem volta para a fila enquanto a primeira entrega ainda está em andamento.
     DB_LOCK_TIMEOUT_MS: '2000',
     SQS_CONSUMER_ENABLED: 'true',
     SQS_CONSUMER_CONCURRENCY: '3',
     SQS_WAIT_TIME_SECONDS: '1',
-    SQS_VISIBILITY_TIMEOUT_SECONDS: '5', // mensagem de um processo morto volta em 5s
+    SQS_VISIBILITY_TIMEOUT_SECONDS: '5',
     SQS_MAX_ATTEMPTS: '5',
     SQS_RETRY_BASE_DELAY_SECONDS: '1',
     SQS_SHUTDOWN_GRACE_MS: '5000',
@@ -41,7 +29,7 @@ beforeAll(async () => {
     PENDING_REFERENCE_POLL_INTERVAL_MS: '100',
     PENDING_REFERENCE_RETRY_BASE_DELAY_MS: '200',
     PENDING_REFERENCE_RETRY_MAX_DELAY_MS: '1000',
-    PENDING_REFERENCE_MAX_ATTEMPTS: '60', // ~1 min: folga para os testes que derrubam tudo
+    PENDING_REFERENCE_MAX_ATTEMPTS: '60',
   });
   nodes = cluster.nodes;
   clients = cluster.clients;
@@ -49,9 +37,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
-  // Cada teste devolve o cluster inteiro e saudável para o próximo...
   await cluster.heal();
-  // ...e a invariante financeira vale para TODAS as wallets, não só as do teste.
   expect(await brokenWallets()).toEqual({ balanceDiffersFromLedger: 0, brokenChains: 0, negativeBalances: 0 });
 });
 
@@ -59,11 +45,8 @@ afterAll(async () => {
   await cluster.stop();
 });
 
-// ---- apoio
-
 const client = (index: number): ApiClient => clients[index % INSTANCES] as ApiClient;
 
-/** Invariantes financeiras conferidas direto no banco, para todas as wallets. */
 async function brokenWallets() {
   const [row] = await cluster.sql`
     SELECT
@@ -82,7 +65,6 @@ async function brokenWallets() {
   };
 }
 
-/** A reconciliação da própria API, pedida a uma instância. */
 async function expectReconciled(wallet: WalletJson, expectedBalance: string, instance = 0): Promise<void> {
   const report = await client(instance).post(`/wallets/${wallet.id}/reconciliation`);
   expect(report.status).toBe(200);
@@ -122,7 +104,6 @@ const statuses = (responses: HttpResult[]) => responses.map((response) => respon
 const tally = (values: (string | number)[]) =>
   values.reduce<Record<string, number>>((totals, value) => ({ ...totals, [value]: (totals[value] ?? 0) + 1 }), {});
 
-/** Deixa a outbox e a fila de eventos vazias, para o teste observar só os eventos dele. */
 async function settleEvents(): Promise<void> {
   await eventually('outbox drenada', async () => (await pendingOutbox()) === 0);
   await queues.drain(queues.eventsUrl, 0);
@@ -132,8 +113,6 @@ async function drainEventIds(): Promise<string[]> {
   const messages = await queues.drain(queues.eventsUrl, 1);
   return messages.map((message) => (JSON.parse(message.Body as string) as { eventId: string }).eventId);
 }
-
-// ---- testes
 
 describe('3 instâncias disputando a mesma wallet', () => {
   test('saldo 100.00 e uma BET de 80.00 em cada instância ao mesmo tempo: só uma é aprovada', async () => {
@@ -163,9 +142,8 @@ describe('3 instâncias disputando a mesma wallet', () => {
     expect(tally(statuses(responses))).toEqual({ 201: 100, 422: 50 });
     expect(await client(0).balanceOf(wallet.id)).toBe('0.00');
     const ledger = await client(0).ledgerOf(wallet.id);
-    expect(ledger).toHaveLength(101); // abertura + 100 débitos
+    expect(ledger).toHaveLength(101);
     expect(ledger.at(-1)?.balance_after).toBe('0.00');
-    // Os saldos observados pelas aprovadas são todos distintos: nenhuma leu o mesmo saldo que outra.
     const observed = responses.filter((response) => response.status === 201).map((response) => response.body.balance.amount);
     expect(new Set(observed).size).toBe(100);
     const stored = await client(1).get(`/wallets/${wallet.id}`);
@@ -198,7 +176,7 @@ describe('3 instâncias disputando a mesma wallet', () => {
     );
 
     expect(tally(statuses(responses))).toEqual({ 201: 120 });
-    expect(await client(0).balanceOf(wallet.id)).toBe('160.00'); // 100 + 60*3 - 60*2
+    expect(await client(0).balanceOf(wallet.id)).toBe('160.00');
     expect(await client(0).ledgerOf(wallet.id)).toHaveLength(121);
     await expectReconciled(wallet, '160.00');
   });
@@ -247,7 +225,6 @@ describe('3 instâncias, wallets diferentes', () => {
         return responses;
       });
 
-      // As 9 apostas das outras wallets terminam nas 3 instâncias enquanto a wallet travada espera.
       const others = await Promise.all(
         free.flatMap((wallet) => clients.map((instance) => instance.submit(instance.payload(wallet, 'BET', '10.00')))),
       );
@@ -277,8 +254,6 @@ describe('3 consumers na mesma fila', () => {
       node.proxy.reset();
     }
 
-    // 40 apostas de 5.00 na mesma wallet (cabem 20) + 6 apostas de 5.00 em cada uma das outras 10.
-    // Envio em ordem dentro de cada wallet e em paralelo entre wallets, como um produtor faria.
     const sendAll = async (wallet: WalletJson, amount: number): Promise<string[]> => {
       const ids: string[] = [];
       for (let index = 0; index < amount; index++) {
@@ -304,12 +279,10 @@ describe('3 consumers na mesma fila', () => {
       expect(await client(0).balanceOf(wallet.id)).toBe('70.00');
       expect(await client(0).ledgerOf(wallet.id)).toHaveLength(7);
     }
-    // Cada mensagem registrada na inbox exatamente uma vez.
     const inbox = await cluster.sql`
       SELECT count(*)::int AS n, count(DISTINCT message_id)::int AS distinct_ids
         FROM inbox_messages WHERE message_id IN ${cluster.sql(messageIds)}`;
     expect(inbox[0]).toMatchObject({ n: 100, distinct_ids: 100 });
-    // As três instâncias consumiram de verdade.
     expect(nodes.map((node) => node.proxy.deliveries > 0)).toEqual([true, true, true]);
     await expectReconciled(shared, '0.00');
   });
@@ -332,7 +305,7 @@ describe('3 consumers na mesma fila', () => {
     await eventually('fila vazia', queueIsEmpty, 30_000);
 
     expect(tally(statuses(responses))).toEqual({ 201: 30 });
-    expect(await client(0).balanceOf(wallet.id)).toBe('60.00'); // 10 débitos, não 40
+    expect(await client(0).balanceOf(wallet.id)).toBe('60.00');
     expect(await client(0).ledgerOf(wallet.id)).toHaveLength(11);
     expect(await queues.depth(queues.dlqUrl)).toBe(0);
   });
@@ -342,30 +315,26 @@ describe('processo morto no meio do fluxo', () => {
   test('worker morto depois do commit e antes do ack: a mensagem volta, outra instância a reconhece e nada duplica', async () => {
     const wallet = await client(0).createWallet('100.00');
     const payload = client(0).payload(wallet, 'BET', '25.00');
-    // O ack (DeleteMessage) de qualquer instância para no proxy, antes de chegar ao SQS.
     const holds = nodes.map((node) => node.proxy.hold('DeleteMessage', 'request'));
 
     const messageId = await queues.send(payload);
     const victimIndex = await Promise.race(holds.map((hold, index) => hold.seen.then(() => index)));
     const victim = nodes[victimIndex] as ClusterNode;
 
-    // O ack só é enviado depois do COMMIT: o efeito já está gravado...
     expect(await transactionByExternalId(payload.externalTransactionId)).toMatchObject({ status: 'PROCESSED' });
     expect(await client(0).balanceOf(wallet.id)).toBe('75.00');
     expect(await inboxRows(messageId)).toBe(1);
 
-    // ...e o processo morre antes de o SQS saber disso.
     await victim.kill();
     holds.forEach((hold, index) => (index === victimIndex ? hold.drop() : hold.release()));
     expect(victim.isRunning).toBe(false);
-    expect(await queues.depth(queues.queueUrl)).toBe(1); // a mensagem continua na fila
+    expect(await queues.depth(queues.queueUrl)).toBe(1);
 
-    // Vencida a visibilidade, uma sobrevivente recebe a mesma mensagem, a inbox a reconhece e ela recebe o ack.
     await eventually('redelivery reconhecida e apagada', queueIsEmpty, 30_000);
     const survivors = nodes.filter((_, index) => index !== victimIndex);
     expect(survivors.some((node) => node.proxy.delivered(messageId))).toBe(true);
 
-    expect(await client(victimIndex + 1).balanceOf(wallet.id)).toBe('75.00'); // um débito só
+    expect(await client(victimIndex + 1).balanceOf(wallet.id)).toBe('75.00');
     expect(await client(victimIndex + 1).ledgerOf(wallet.id)).toHaveLength(2);
     expect(await inboxRows(messageId)).toBe(1);
     expect(await transactionsOf([wallet.id])).toBe(1);
@@ -373,7 +342,6 @@ describe('processo morto no meio do fluxo', () => {
     expect(await client(victimIndex + 1).eventsOf(transaction?.id as string)).toEqual(['WagerTransactionProcessed']);
     expect(await queues.depth(queues.dlqUrl)).toBe(0);
 
-    // A instância morta volta e o serviço segue com as três.
     await victim.start();
     await expectReconciled(wallet, '75.00', victimIndex);
   });
@@ -384,7 +352,6 @@ describe('processo morto no meio do fluxo', () => {
     for (const node of nodes) {
       node.proxy.reset();
     }
-    // O teste segura o lock da wallet: quem receber a mensagem fica parado dentro da transação, já com a inbox inserida.
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let acquired!: () => void;
@@ -410,8 +377,6 @@ describe('processo morto no meio do fluxo', () => {
 
       await (nodes[victimIndex] as ClusterNode).kill();
 
-      // O Postgres só percebe que o cliente morreu quando a espera pelo lock termina
-      // (lock_timeout): aí a transação é desfeita, inclusive o registro na inbox.
       await eventually('transação da instância morta desfeita', async () => (await lockWaiters()) === 0);
       expect(await inboxRows(messageId)).toBe(0);
       expect(await transactionByExternalId(payload.externalTransactionId)).toBeUndefined();
@@ -420,7 +385,6 @@ describe('processo morto no meio do fluxo', () => {
       await holder.catch(() => undefined);
     }
 
-    // A mensagem não foi apagada: volta e é processada do zero por uma sobrevivente.
     await eventually('mensagem processada por outra instância', queueIsEmpty, 30_000);
     expect(await transactionByExternalId(payload.externalTransactionId)).toMatchObject({ status: 'PROCESSED' });
     expect(await inboxRows(messageId)).toBe(1);
@@ -435,14 +399,12 @@ describe('processo morto no meio do fluxo', () => {
     for (const node of nodes) {
       node.proxy.reset();
     }
-    // O SendMessageBatch chega ao SQS, mas a resposta fica retida: o publisher não consegue marcar.
     const holds = nodes.map((node) => node.proxy.hold('SendMessageBatch', 'response'));
 
     const bet = await client(0).submit(client(0).payload(wallet, 'BET', '10.00'));
     expect(bet.status).toBe(201);
     const victimIndex = await Promise.race(holds.map((hold, index) => hold.seen.then(() => index)));
 
-    // Os eventos já estão na fila, e no banco continuam pendentes.
     const pending = await cluster.sql`SELECT id FROM outbox_messages WHERE published_at IS NULL ORDER BY id`;
     const eventIds = [...pending].map((row) => row.id as string);
     expect(eventIds).toHaveLength(2);
@@ -451,14 +413,13 @@ describe('processo morto no meio do fluxo', () => {
     await (nodes[victimIndex] as ClusterNode).kill();
     holds.forEach((hold, index) => (index === victimIndex ? hold.drop() : hold.release()));
 
-    // Uma sobrevivente pega as linhas (o lock morreu com o processo) e publica de novo.
     await eventually('eventos republicados e marcados', async () => (await pendingOutbox()) === 0, 30_000);
     const sent = nodes
       .flatMap((node) => node.proxy.requests('SendMessageBatch') as { Entries: { Id: string }[] }[])
       .flatMap((request) => request.Entries.map((entry) => entry.Id))
       .filter((id) => eventIds.includes(id));
-    expect(sent).toHaveLength(4); // cada evento enviado duas vezes, com o mesmo id...
-    expect((await drainEventIds()).sort()).toEqual([...eventIds].sort()); // ...e a fila FIFO ficou com uma cópia de cada
+    expect(sent).toHaveLength(4);
+    expect((await drainEventIds()).sort()).toEqual([...eventIds].sort());
 
     expect(await client(victimIndex + 1).balanceOf(wallet.id)).toBe('90.00');
   });
@@ -472,7 +433,6 @@ describe('reinício do serviço', () => {
     let failedAttempts = 0;
     let restarting = true;
 
-    // Um provedor: envia e, se não teve resposta (instância fora) ou recebeu 503, repete a MESMA operação em outra instância.
     const deliver = async (payload: TransactionPayload, firstInstance: number): Promise<number> => {
       for (let attempt = 0; attempt < 200; attempt++) {
         try {
@@ -481,7 +441,6 @@ describe('reinício do serviço', () => {
             return response.status;
           }
         } catch {
-          // conexão recusada ou cortada: a instância está reiniciando
         }
         failedAttempts += 1;
         await Bun.sleep(20);
@@ -499,13 +458,12 @@ describe('reinício do serviço', () => {
     };
     const load = Promise.all(Array.from({ length: 6 }, (_, index) => provider(index)));
 
-    // Reinício em sequência: nunca há menos de duas instâncias de pé.
     try {
       for (const node of nodes) {
         await Bun.sleep(300);
         const stoppedAt = Date.now();
         await node.terminate();
-        expect(Date.now() - stoppedAt).toBeLessThan(10_000); // terminou sozinho, sem precisar de SIGKILL
+        expect(Date.now() - stoppedAt).toBeLessThan(10_000);
         expect(node.isRunning).toBe(false);
         await node.start();
       }
@@ -514,11 +472,9 @@ describe('reinício do serviço', () => {
     }
     await load;
 
-    // A carga realmente cruzou as janelas de reinício.
     expect(failedAttempts).toBeGreaterThan(0);
     expect(tally(finalStatuses)).toEqual({ 201: sent.length });
 
-    // Cada operação enviada existe exatamente uma vez, não importa quantas tentativas levou.
     expect(await transactionsOf(wallets.map((wallet) => wallet.id))).toBe(sent.length);
     for (const wallet of wallets) {
       const bets = sent.filter((payload) => payload.walletId === wallet.id).length;
@@ -526,7 +482,6 @@ describe('reinício do serviço', () => {
       expect(await client(0).ledgerOf(wallet.id)).toHaveLength(1 + bets);
     }
 
-    // O que foi confirmado antes do reinício continua valendo depois: a idempotência está no banco, não na memória.
     const first = sent[0] as TransactionPayload;
     const replays = await Promise.all(clients.map((instance) => instance.submit(first)));
     expect(tally(statuses(replays))).toEqual({ 201: 3 });
@@ -542,11 +497,9 @@ describe('reinício do serviço', () => {
       [...(await cluster.sql`SELECT id FROM outbox_messages`)].map((row) => row.id as string),
     );
 
-    // Para as instâncias (graciosamente) e enche a fila: 20 apostas de 2.00 por wallet.
     await Promise.all(nodes.map((node) => node.terminate()));
     const orphanWallet = wallets[0] as WalletJson;
     const lateBet = client(0).payload(orphanWallet, 'BET', '2.00');
-    // Na primeira wallet, um REFUND entra na fila ANTES da aposta que ele estorna (a última do grupo).
     const orphanRefund = client(0).payload(orphanWallet, 'REFUND', '2.00', {
       referenceExternalTransactionId: lateBet.externalTransactionId,
     });
@@ -558,24 +511,21 @@ describe('reinício do serviço', () => {
           payloads[payloads.length - 1] = lateBet;
         }
         for (const payload of payloads) {
-          await queues.send(payload); // em ordem dentro do grupo da wallet
+          await queues.send(payload);
         }
       }),
     );
     expect(await queues.depth(queues.queueUrl)).toBe(121);
 
-    // Sobe tudo, deixa processar um pedaço e derruba as três de uma vez, sem aviso.
     await cluster.heal();
     await eventually('parte da fila processada', async () => (await transactionsOf(walletIds)) >= 30, 30_000);
     await Promise.all(nodes.map((node) => node.kill()));
 
-    // Logo após a queda, com tudo parado: o que commitou está íntegro, o resto continua na fila.
     const processedAtCrash = await transactionsOf(walletIds);
     expect(processedAtCrash).toBeLessThan(121);
     expect(await brokenWallets()).toEqual({ balanceDiffersFromLedger: 0, brokenChains: 0, negativeBalances: 0 });
     expect(await queues.depth(queues.queueUrl)).toBeGreaterThan(0);
 
-    // Reinício: as instâncias retomam de onde o banco e a fila pararam.
     await cluster.heal();
     await eventually('fila vazia depois do reinício', queueIsEmpty, 60_000);
     await eventually(
@@ -590,18 +540,17 @@ describe('reinício do serviço', () => {
       SELECT status, count(*)::int AS n FROM wager_transactions
        WHERE wallet_id IN ${cluster.sql(walletIds)} AND kind <> 'OPENING' GROUP BY status`;
     expect([...outcomes].map((row) => [row.status, row.n])).toEqual([['PROCESSED', 121]]);
-    expect(await client(0).balanceOf(orphanWallet.id)).toBe('62.00'); // 100 - 20*2 + 2
+    expect(await client(0).balanceOf(orphanWallet.id)).toBe('62.00');
     expect(await client(0).ledgerOf(orphanWallet.id)).toHaveLength(22);
     for (const wallet of wallets.slice(1)) {
       expect(await client(0).balanceOf(wallet.id)).toBe('60.00');
       expect(await client(0).ledgerOf(wallet.id)).toHaveLength(21);
     }
 
-    // Eventos: todos os gravados durante o teste chegaram à fila, uma cópia de cada.
     const newEvents = [...(await cluster.sql`SELECT id FROM outbox_messages`)]
       .map((row) => row.id as string)
       .filter((id) => !knownEvents.has(id));
-    expect(newEvents).toHaveLength(120 * 2 + 3); // 2 por aposta + pendência, processamento e saldo do estorno
+    expect(newEvents).toHaveLength(120 * 2 + 3);
     const delivered = await drainEventIds();
     expect(delivered).toHaveLength(newEvents.length);
     expect(new Set(delivered)).toEqual(new Set(newEvents));

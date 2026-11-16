@@ -15,13 +15,8 @@ export interface ReadinessReport {
   };
 }
 
-/** Uma dependência que não responde neste prazo conta como indisponível. */
 const CHECK_TIMEOUT_MS = 2_000;
 
-/**
- * Readiness: a instância só deve receber tráfego se consegue de fato falar com
- * o Postgres e com o SQS. As checagens fazem uma ida e volta real em cada um.
- */
 @Injectable()
 export class ReadinessService {
   constructor(
@@ -43,7 +38,6 @@ export class ReadinessService {
     };
   }
 
-  /** Usado pelo consumer para saber quando pode voltar a receber mensagens. */
   async isPostgresUp(): Promise<boolean> {
     return (await this.probe('postgres', () => this.pingPostgres())) === 'up';
   }
@@ -52,7 +46,6 @@ export class ReadinessService {
     await this.orm.em.getConnection().execute('select 1');
   }
 
-  /** Além de alcançar o SQS, confirma que a fila que vamos consumir existe. */
   private async pingSqs(signal: AbortSignal): Promise<void> {
     await this.sqs.send(
       new GetQueueAttributesCommand({
@@ -63,10 +56,6 @@ export class ReadinessService {
     );
   }
 
-  /**
-   * Executa uma checagem com prazo. O motivo da falha vai para o log e não
-   * para a resposta: o endpoint é aberto e não deve expor detalhes internos.
-   */
   private async probe(
     dependency: string,
     ping: (signal: AbortSignal) => Promise<void>,

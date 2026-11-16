@@ -8,17 +8,11 @@ export interface ReconciliationReport {
   walletId: string;
   storedBalance: Money;
   calculatedBalance: Money;
-  /** storedBalance - calculatedBalance. Negativa quando o ledger explica mais saldo do que o gravado. */
   difference: Money;
   consistent: boolean;
   checkedEntries: number;
 }
 
-/**
- * Compara o saldo materializado com o saldo reconstruído pelo ledger.
- * Só detecta e sinaliza: divergência NUNCA é corrigida aqui — vai para log,
- * métrica e resposta, e a correção é uma decisão operacional.
- */
 export class ReconcileWallet {
   constructor(
     private readonly unitOfWork: UnitOfWork,
@@ -28,8 +22,6 @@ export class ReconcileWallet {
   ) {}
 
   async execute(walletId: string): Promise<ReconciliationReport> {
-    // Saldo e somas do ledger vêm de UM comando SQL, ou seja, de um único
-    // instante do banco: não trava a wallet e não mistura estados.
     const snapshot = await this.unitOfWork.session(() => this.wallets.ledgerSnapshot(walletId));
     if (snapshot === undefined) {
       throw new ResourceNotFoundError('Wallet', walletId);

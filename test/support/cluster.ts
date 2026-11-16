@@ -6,21 +6,9 @@ import { ApiClient } from './test-app';
 import { openOrm, recreateTestDatabase } from './test-database';
 import { TestQueues } from './test-queues';
 
-/**
- * Várias instâncias REAIS da aplicação: cada uma é um processo do sistema
- * operacional rodando `bun src/main.ts` — o mesmo comando do Dockerfile —, com
- * a sua porta HTTP e o seu pool de conexões, todas sobre o mesmo Postgres e as
- * mesmas filas. Nada é compartilhado em memória entre elas: se a correção
- * dependesse de estado do processo, estes testes falhariam.
- *
- * Cada instância fala com o SQS através de um proxy próprio (SqsProxy), o que
- * permite ao teste matar o processo num ponto exato do fluxo.
- */
-
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const READY_TIMEOUT_MS = 30_000;
 
-/** Processos ainda vivos, para não deixar órfãos se o teste terminar de forma abrupta. */
 const running = new Set<ReturnType<typeof Bun.spawn>>();
 process.on('exit', () => {
   for (const child of running) {
@@ -38,7 +26,6 @@ function freePort(): number {
 export class ClusterNode {
   private child: ReturnType<typeof Bun.spawn> | undefined;
   readonly client: ApiClient;
-  /** Linhas que o processo escreveu no stdout e no stderr (só com `captureOutput`). */
   readonly output: string[] = [];
 
   constructor(
@@ -56,7 +43,6 @@ export class ClusterNode {
     return this.child !== undefined && this.child.exitCode === null && this.child.signalCode === null;
   }
 
-  /** Sobe o processo e espera o /health/ready responder 200. */
   async start(): Promise<void> {
     if (this.isRunning) {
       return;
@@ -88,14 +74,12 @@ export class ClusterNode {
           return;
         }
       } catch {
-        // ainda não está ouvindo
       }
       await Bun.sleep(50);
     }
     throw new Error(`instância ${this.name} não ficou pronta em ${READY_TIMEOUT_MS}ms`);
   }
 
-  /** SIGKILL: o processo morre na hora, sem rodar nenhum hook de shutdown. */
   async kill(): Promise<void> {
     const child = this.child;
     if (child === undefined) {
@@ -105,7 +89,6 @@ export class ClusterNode {
     await child.exited;
   }
 
-  /** SIGTERM: shutdown gracioso. Devolve o código de saída. */
   async terminate(): Promise<number> {
     const child = this.child;
     if (child === undefined) {
@@ -116,7 +99,6 @@ export class ClusterNode {
   }
 }
 
-/** Lê a saída de um processo, linha a linha, enquanto ele estiver vivo. */
 async function collectLines(stream: ReadableStream<Uint8Array>, lines: string[]): Promise<void> {
   const decoder = new TextDecoder();
   let pending = '';
@@ -135,15 +117,9 @@ export class Cluster {
   private constructor(
     readonly nodes: readonly ClusterNode[],
     readonly queues: TestQueues,
-    /** Conexão direta ao banco, para conferir o estado sem passar por nenhuma instância. */
     readonly sql: SQL,
   ) {}
 
-  /**
-   * Banco e filas próprios da suíte, e `size` instâncias prontas.
-   * `env` ajusta as variáveis de todas as instâncias (tempos curtos para teste).
-   * `captureOutput` guarda o que cada processo escreve, para testar os logs.
-   */
   static async start(
     suite: string,
     size: number,
@@ -193,7 +169,6 @@ export class Cluster {
     return this.nodes.map((node) => node.client);
   }
 
-  /** Deixa o cluster como no início: proxies repassando tudo e todas as instâncias de pé. */
   async heal(): Promise<void> {
     for (const node of this.nodes) {
       node.proxy.reset();

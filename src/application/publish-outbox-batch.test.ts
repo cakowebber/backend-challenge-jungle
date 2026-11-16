@@ -5,12 +5,6 @@ import type { OutboxRepository } from './ports/repositories';
 import type { UnitOfWork } from './ports/unit-of-work';
 import { PublishOutboxBatch } from './publish-outbox-batch';
 
-/**
- * Decisões do ciclo de publicação, com portas em memória. O comportamento
- * contra Postgres e SQS reais (SKIP LOCKED, queda no meio, vários publishers)
- * está em test/integration/outbox-publisher.test.ts.
- */
-
 const NOW = new Date('2026-11-15T12:00:00.000Z');
 const RETRY = { baseDelayMs: 1_000, maxDelayMs: 60_000 };
 
@@ -73,7 +67,7 @@ describe('PublishOutboxBatch', () => {
     expect(await useCase.execute()).toEqual({ claimed: 0, published: 0, failed: 0 });
     expect(published).toBe(false);
     expect(marked).toEqual([]);
-    expect(requested).toEqual([10]); // pede ao banco o tamanho de lote configurado
+    expect(requested).toEqual([10]);
   });
 
   test('tudo aceito: marca o lote inteiro como publicado', async () => {
@@ -95,14 +89,12 @@ describe('PublishOutboxBatch', () => {
     );
 
     expect(await useCase.execute()).toEqual({ claimed: 3, published: 2, failed: 1 });
-    // O atraso de publicação só é medido para o que foi de fato publicado.
     expect(observed).toEqual([
       { name: 'outbox_publish_delay_seconds', seconds: 0 },
       { name: 'outbox_publish_delay_seconds', seconds: 0 },
     ]);
     expect(marked).toEqual([{ ids: ['a', 'c'], at: NOW }]);
     expect(retried.map((message) => message.id)).toEqual(['b']);
-    // 3ª tentativa frustrada: backoff de 1s * 2^2 = 4s, e a mensagem segue pendente.
     expect(batch[1]?.attempts).toBe(3);
     expect(batch[1]?.nextAttemptAt).toEqual(new Date(NOW.getTime() + 4_000));
     expect(batch[1]?.isPending()).toBe(true);
@@ -115,7 +107,6 @@ describe('PublishOutboxBatch', () => {
       throw new Error('SQS fora do ar');
     });
 
-    // Não lançar é o que permite a transação commitar o backoff.
     expect(await useCase.execute()).toEqual({ claimed: 2, published: 0, failed: 2 });
     expect(marked).toEqual([{ ids: [], at: NOW }]);
     expect(retried.map((message) => message.id)).toEqual(['a', 'b']);

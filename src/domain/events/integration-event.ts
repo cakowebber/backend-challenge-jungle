@@ -9,7 +9,6 @@ export interface IntegrationEventProps<T> {
   data: T;
 }
 
-/** Metadados de rastreio que quem emite o evento fornece. */
 export interface EventContext {
   eventId: string;
   correlationId: string;
@@ -17,23 +16,17 @@ export interface EventContext {
   occurredAt: Date;
 }
 
-/** Envelope serializado: é exatamente o que vai para o payload da outbox. */
 export interface IntegrationEventEnvelope<T> {
   eventId: string;
   eventType: string;
   aggregateId: string;
   correlationId: string;
   causationId?: string;
-  occurredAt: string; // ISO-8601
+  occurredAt: string;
   version: number;
   data: T;
 }
 
-/**
- * Base dos eventos de integração. `eventType` e `version` pertencem ao tipo
- * (cada subclasse fixa os seus), nunca a uma string solta no ponto de emissão.
- * `data` só carrega valores serializáveis — dinheiro vai como MoneyProps.
- */
 export abstract class IntegrationEvent<T> {
   abstract readonly eventType: string;
   abstract readonly version: number;

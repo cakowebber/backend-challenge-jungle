@@ -20,7 +20,6 @@ async function transactionsOf(walletId: string): Promise<number> {
   return row.n as number;
 }
 
-/** Aposta já aplicada; devolve o payload (para referenciar) e a resposta. */
 async function placedBet(wallet: WalletJson, amount: string) {
   const payload = app.payload(wallet, 'BET', amount);
   const response = await app.submit(payload);
@@ -63,8 +62,7 @@ describe('POST /wagering/transactions — operações', () => {
       idempotentReplay: false,
     });
     expect(await app.balanceOf(wallet.id)).toBe('20.00');
-    expect(await app.ledgerOf(wallet.id)).toHaveLength(1); // só a abertura
-    // a rejeição fica gravada e auditável
+    expect(await app.ledgerOf(wallet.id)).toHaveLength(1);
     expect(await transactionsOf(wallet.id)).toBe(1);
   });
 
@@ -132,8 +130,8 @@ describe('POST /wagering/transactions — operações', () => {
   test('ROLLBACK de WIN debita; se negativaria o saldo, é rejeitado com código próprio', async () => {
     const wallet = await app.createWallet('10.00');
     const win = app.payload(wallet, 'WIN', '50.00');
-    await app.submit(win); // 60.00
-    await placedBet(wallet, '55.00'); // 5.00
+    await app.submit(win);
+    await placedBet(wallet, '55.00');
 
     const rollback = await app.submit(
       app.payload(wallet, 'ROLLBACK', '50.00', { referenceExternalTransactionId: win.externalTransactionId }),
@@ -214,14 +212,13 @@ describe('POST /wagering/transactions — idempotência', () => {
     const payload = app.payload(wallet, 'BET', '25.00');
 
     const original = await app.submit(payload);
-    await placedBet(wallet, '100.00'); // o saldo da wallet muda depois: 875.00
+    await placedBet(wallet, '100.00');
     const replay = await app.submit(payload);
 
     expect(original.body.balance).toEqual(BRL('975.00'));
     expect(replay.status).toBe(original.status);
     expect(replay.body).toEqual({ ...original.body, idempotentReplay: true });
-    expect(replay.body.balance).toEqual(BRL('975.00')); // e não 875.00
-    // o replay não debitou de novo
+    expect(replay.body.balance).toEqual(BRL('975.00'));
     expect(await app.balanceOf(wallet.id)).toBe('875.00');
     expect(await transactionsOf(wallet.id)).toBe(2);
   });
@@ -231,7 +228,7 @@ describe('POST /wagering/transactions — idempotência', () => {
     const payload = app.payload(wallet, 'BET', '50.00');
 
     const original = await app.submit(payload);
-    await app.submit(app.payload(wallet, 'WIN', '500.00')); // agora há saldo
+    await app.submit(app.payload(wallet, 'WIN', '500.00'));
     const replay = await app.submit(payload);
 
     expect(original.status).toBe(422);
@@ -277,7 +274,7 @@ describe('POST /wagering/transactions — idempotência', () => {
 
     expect(divergent.status).toBe(409);
     expect(divergent.body.code).toBe('IDEMPOTENCY_KEY_CONFLICT');
-    expect(divergent.body.idempotentReplay).toBeUndefined(); // conflito não é replay
+    expect(divergent.body.idempotentReplay).toBeUndefined();
     expect(await app.balanceOf(wallet.id)).toBe('75.00');
     expect(await transactionsOf(wallet.id)).toBe(1);
   });
@@ -402,7 +399,7 @@ describe('atomicidade: wallet, ledger, transação e outbox na mesma transação
     const [event] = await app.sql`
       SELECT payload, published_at FROM outbox_messages
        WHERE event_type = 'WalletBalanceChanged' AND payload->'data'->>'transactionId' = ${bet.body.transactionId}`;
-    expect(event.published_at).toBeNull(); // só o worker publica, depois do commit
+    expect(event.published_at).toBeNull();
     expect(event.payload).toMatchObject({
       eventType: 'WalletBalanceChanged',
       version: 1,
@@ -425,7 +422,6 @@ describe('atomicidade: wallet, ledger, transação e outbox na mesma transação
 
     expect(await app.eventsOf(rejected.body.transactionId)).toEqual(['WagerTransactionRejected']);
     expect(await app.eventsOf(loss.body.transactionId)).toEqual(['WagerTransactionProcessed']);
-    // só a abertura mudou o saldo
     expect(await app.eventsOf(wallet.id)).toEqual(['WalletBalanceChanged']);
   });
 
@@ -443,7 +439,6 @@ describe('atomicidade: wallet, ledger, transação e outbox na mesma transação
   });
 
   test('falha no meio (gravação da outbox): NADA fica gravado, e o reenvio processa uma única vez', async () => {
-    // Falha real do banco, injetada só para um correlationId específico.
     await app.sql.unsafe(`
       CREATE FUNCTION test_fail_outbox() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
@@ -460,7 +455,6 @@ describe('atomicidade: wallet, ledger, transação e outbox na mesma transação
     const payload = app.payload(wallet, 'BET', '25.00');
     const key = `provider-a:${payload.externalTransactionId}`;
 
-    // A essa altura o use case já debitou a wallet e inseriu o lançamento.
     const failed = await app.post('/wagering/transactions', payload, {
       'idempotency-key': key,
       'x-correlation-id': 'falhar-na-outbox',
@@ -473,7 +467,6 @@ describe('atomicidade: wallet, ledger, transação e outbox na mesma transação
     expect(await transactionsOf(wallet.id)).toBe(0);
     expect((await app.get(`/wallets/${wallet.id}`)).body.version).toBe(1);
 
-    // Como nada foi gravado, a mesma requisição pode ser reenviada com a mesma key.
     const retry = await app.submit(payload, key);
     expect(retry.status).toBe(201);
     expect(retry.body.idempotentReplay).toBe(false);

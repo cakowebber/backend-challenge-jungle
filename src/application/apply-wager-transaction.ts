@@ -27,18 +27,6 @@ export interface ApplyContext {
   now: Date;
 }
 
-/**
- * Passos 5 a 7 do fluxo: resolve a referência, aplica as regras de domínio e
- * grava saldo, lançamento, desfecho e eventos.
- *
- * PRÉ-CONDIÇÕES, garantidas por quem chama:
- *   - está dentro de uma transação SQL;
- *   - `wallet` foi lida com lock (lockById) nesta transação;
- *   - `transaction` já está gravada, em PENDING ou PENDING_REFERENCE.
- *
- * É compartilhado pela entrada (HTTP/fila) e pelo worker de PENDING_REFERENCE,
- * então as duas vias aplicam exatamente as mesmas regras.
- */
 export class ApplyWagerTransaction {
   constructor(
     private readonly wallets: WalletRepository,
@@ -53,9 +41,6 @@ export class ApplyWagerTransaction {
     const versionUnderLock = wallet.version;
     const statusBefore = transaction.status;
 
-    // 5. Referência. Leitura simples, sem lock próprio: uma referência válida é
-    //    da mesma wallet, e tudo que a altera passa pelo lock que já seguramos.
-    //    (Referência de outra wallet é rejeitada pelas regras, qualquer que seja o estado dela.)
     let reference: WagerTransaction | undefined;
     let referenceAlreadyReversed = false;
     if (transaction.referenceExternalTransactionId !== undefined) {
@@ -68,7 +53,6 @@ export class ApplyWagerTransaction {
       }
     }
 
-    // 6. Regras de negócio (puras, em memória).
     const { ledgerEntry } = applyWagerRules({
       wallet,
       transaction,
@@ -85,7 +69,6 @@ export class ApplyWagerTransaction {
     }
     await this.transactions.saveOutcome(transaction);
 
-    // 7. Eventos na outbox, na mesma transação SQL. A publicação é do worker, depois do commit.
     const events = this.eventsFor(wallet, transaction, ledgerEntry, statusBefore, context);
     await this.outbox.add(events.map((event) => OutboxMessage.enqueue(event)));
   }
@@ -115,7 +98,6 @@ export class ApplyWagerTransaction {
       case WagerTransactionStatus.Rejected:
         return [WagerTransactionRejected.from(transaction, eventContext())];
       case WagerTransactionStatus.PendingReference:
-        // Só na transição: uma nova tentativa frustrada do worker não repete o evento.
         return statusBefore === WagerTransactionStatus.PendingReference
           ? []
           : [WagerTransactionPendingReference.from(transaction, eventContext())];

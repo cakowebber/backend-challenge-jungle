@@ -3,12 +3,10 @@ import { ID_GENERATOR, type IdGenerator } from '../../application/ports/id-gener
 import { APP_LOGGER, METRICS, MetricName, type AppLogger, type Metrics } from '../../application/ports/observability';
 import { correlationIdFrom, type CorrelatedRequest } from './correlation';
 
-/** O mínimo que o middleware usa do Express, sem depender dos tipos dele. */
 interface IncomingRequest extends CorrelatedRequest {
   method: string;
   originalUrl: string;
   headers: Record<string, unknown>;
-  /** Preenchido pelo Express quando uma rota casa: o padrão, ex. "/wallets/:walletId". */
   route?: { path?: string };
 }
 
@@ -18,19 +16,8 @@ interface OutgoingResponse {
   on(event: 'finish', listener: () => void): unknown;
 }
 
-/** Sondas e scrapes chegam a cada poucos segundos: medidos, mas fora do log de acesso. */
 const QUIET_PATHS = /^\/(health|metrics)(\/|$)/;
 
-/**
- * Primeira coisa a rodar em toda requisição HTTP:
- *
- *  - resolve o correlationId (o do chamador, se bem formado; senão um novo) e
- *    o devolve no header X-Correlation-Id de TODA resposta, inclusive erro;
- *  - ao fim da resposta, registra a latência e uma linha de log de acesso.
- *
- * A latência usa o PADRÃO da rota como label ("/wallets/:walletId"), nunca a
- * URL: um label por id criaria uma série de métrica por wallet.
- */
 @Injectable()
 export class HttpObservabilityMiddleware implements NestMiddleware {
   constructor(

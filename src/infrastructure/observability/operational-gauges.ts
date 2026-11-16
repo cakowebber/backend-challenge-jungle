@@ -7,19 +7,8 @@ import { SQS_CLIENT } from '../messaging/sqs.provider';
 import { GaugeName } from './metric-catalog';
 import type { GaugeSample } from './prometheus-metrics';
 
-/** Uma origem que não responde neste prazo fica sem os seus gauges neste scrape. */
 const COLLECT_TIMEOUT_MS = 2_000;
 
-/**
- * Valores que são ESTADO GLOBAL, não eventos de uma instância: quantos eventos
- * esperam na outbox e há quanto tempo, quantas mensagens estão na DLQ. Um
- * contador em memória não responde isso (cada instância só vê o que ela mesma
- * fez), então eles são lidos do banco e do SQS a cada GET /metrics. Todas as
- * instâncias devolvem o mesmo valor.
- *
- * Banco ou SQS fora não derrubam o /metrics: os gauges daquela origem ficam
- * ausentes no scrape e `metrics_collection_errors_total` sobe.
- */
 @Injectable()
 export class OperationalGauges {
   constructor(
@@ -38,14 +27,6 @@ export class OperationalGauges {
     return [...database, ...queues];
   }
 
-  /**
-   * Um único comando SQL = um único instante do banco. As três contagens usam
-   * índices parciais (só pendentes), então o custo acompanha o que está
-   * pendente e não o histórico.
-   *
-   * O lag usa o relógio do banco contra o `occurred_at` gravado pela
-   * aplicação; uma diferença pequena de relógio não pode dar lag negativo.
-   */
   private async fromDatabase(): Promise<GaugeSample[]> {
     const [row] = await this.orm.em.getConnection().execute<
       { outbox_pending: string; outbox_lag_seconds: string; pending_references: string }[]

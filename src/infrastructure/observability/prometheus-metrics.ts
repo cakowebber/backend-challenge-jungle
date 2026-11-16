@@ -1,7 +1,6 @@
 import type { MetricLabels, Metrics } from '../../application/ports/observability';
 import { METRIC_CATALOG, type MetricDefinition } from './metric-catalog';
 
-/** Um valor de gauge lido na hora do scrape. */
 export interface GaugeSample {
   readonly name: string;
   readonly labels?: MetricLabels;
@@ -15,20 +14,11 @@ interface CounterSeries {
 
 interface HistogramSeries {
   labels: MetricLabels;
-  /** Observações por bucket (não acumulado); a última posição é o +Inf. */
   counts: number[];
   sum: number;
   count: number;
 }
 
-/**
- * Métricas do processo, em memória, expostas no formato texto do Prometheus.
- *
- * Sem biblioteca: são três tipos (contador, gauge, histograma de buckets
- * fixos) e um formato de texto estável. Os valores são do processo e zeram
- * quando ele reinicia — o Prometheus trata isso em `rate()`; com várias
- * instâncias, cada uma expõe o seu /metrics e a soma é feita na consulta.
- */
 export class PrometheusMetrics implements Metrics {
   private readonly counters = new Map<string, Map<string, CounterSeries>>();
   private readonly histograms = new Map<string, Map<string, HistogramSeries>>();
@@ -62,12 +52,10 @@ export class PrometheusMetrics implements Metrics {
     current.count += 1;
   }
 
-  /** Valor atual de um contador (para os testes). */
   value(name: string, labels: MetricLabels = {}): number {
     return this.counters.get(name)?.get(labelKey(labels))?.value ?? 0;
   }
 
-  /** Quantas observações um histograma recebeu, somando as séries que têm estes labels (para os testes). */
   observations(name: string, labels: MetricLabels = {}): number {
     let total = 0;
     for (const series of this.histograms.get(name)?.values() ?? []) {
@@ -78,12 +66,6 @@ export class PrometheusMetrics implements Metrics {
     return total;
   }
 
-  /**
-   * Texto de /metrics: tudo que está no catálogo, na ordem do catálogo, mais
-   * os gauges recebidos. Contador sem label aparece com 0 desde o início, para
-   * a série existir antes do primeiro evento. Contador com label só ganha
-   * séries quando o evento acontece (não dá para adivinhar os valores do label).
-   */
   render(gauges: readonly GaugeSample[] = []): string {
     const lines: string[] = [];
     for (const [name, definition] of Object.entries(this.catalog)) {
@@ -119,8 +101,6 @@ export class PrometheusMetrics implements Metrics {
     const buckets = this.bucketsOf(name);
     const lines: string[] = [];
     for (const entry of this.histograms.get(name)?.values() ?? []) {
-      // No formato do Prometheus os buckets são ACUMULADOS: cada `le` conta
-      // todas as observações menores ou iguais a ele.
       let cumulative = 0;
       buckets.forEach((upperBound, index) => {
         cumulative += entry.counts[index] ?? 0;
@@ -153,7 +133,6 @@ function seriesOf<T>(store: Map<string, Map<string, T>>, name: string): Map<stri
   return series;
 }
 
-/** Identidade de uma série: os labels em ordem alfabética. */
 function labelKey(labels: MetricLabels): string {
   return Object.keys(labels)
     .sort()
@@ -166,7 +145,6 @@ function formatLabels(labels: MetricLabels): string {
   return pairs.length === 0 ? '' : `{${pairs.join(',')}}`;
 }
 
-/** Escapes exigidos pelo formato: barra invertida, aspas e quebra de linha. */
 function escapeLabelValue(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n');
 }

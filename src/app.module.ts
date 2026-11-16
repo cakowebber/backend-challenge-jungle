@@ -38,10 +38,6 @@ import { MetricsController } from './interface/http/metrics.controller';
 import { WageringController } from './interface/http/wagering.controller';
 import { WalletsController } from './interface/http/wallets.controller';
 
-/**
- * Os use cases não conhecem o Nest (sem decorators): são classes comuns,
- * montadas aqui com as portas que cada um recebe no construtor.
- */
 const useCases: Provider[] = [
   {
     provide: REFERENCE_RETRY_POLICY,
@@ -155,7 +151,6 @@ const useCases: Provider[] = [
 
 @Module({})
 export class AppModule implements NestModule {
-  /** Correlação, latência e log de acesso em todas as rotas HTTP. */
   configure(consumer: MiddlewareConsumer): void {
     consumer.apply(HttpObservabilityMiddleware).forRoutes('{*path}');
   }
@@ -168,10 +163,8 @@ export class AppModule implements NestModule {
       providers: [
         ...useCases,
         { provide: APP_FILTER, useClass: ApiExceptionFilter },
-        // Segunda porta de entrada: a fila chama os mesmos use cases do HTTP.
         WagerMessageHandler,
         SqsWagerConsumer,
-        // Workers em segundo plano: publicação da outbox e reprocessamento de PENDING_REFERENCE.
         OutboxPublisherWorker,
         PendingReferenceWorker,
       ],

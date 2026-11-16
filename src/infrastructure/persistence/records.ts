@@ -1,17 +1,5 @@
 import { BigIntType, DecimalType, EntitySchema } from '@mikro-orm/core';
 
-/**
- * Registros de persistência: o formato das linhas, e nada mais. O MikroORM
- * mapeia ESTAS estruturas (via EntitySchema, sem decorators); os repositórios
- * convertem de e para o domínio usando as factories `rehydrate`.
- *
- * Por que não mapear as classes de domínio direto: o ORM as hidrataria por
- * conta própria, contornando o `rehydrate` e acoplando o domínio ao ORM.
- *
- * Dinheiro: NUMERIC(19,2) lido e gravado como STRING (DecimalType em modo
- * 'string'), nunca number. A moeda fica em coluna própria.
- * O schema é criado pelas migrations; aqui só importa o tipo em runtime.
- */
 const money = () => ({ type: new DecimalType('string') });
 
 export interface WalletRecord {
@@ -94,7 +82,6 @@ export const WagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
 
 export interface LedgerEntryRecord {
   id: string;
-  /** Gerado pelo banco (identity). Ausente no INSERT, presente na leitura. */
   seq?: string;
   walletId: string;
   transactionId: string;

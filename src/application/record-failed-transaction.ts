@@ -17,22 +17,10 @@ import type { UnitOfWork } from './ports/unit-of-work';
 import { messagePayloadHash, type ProcessWagerTransactionCommand } from './process-wager-transaction';
 
 export type RecordFailedOutcome =
-  /** A transação foi gravada como FAILED. */
   | 'RECORDED'
-  /** Já existia um registro para esta operação ou mensagem; nada foi alterado. */
   | 'ALREADY_SETTLED'
-  /** Não há como gravar (a wallet não existe). */
   | 'NOT_RECORDABLE';
 
-/**
- * Último recurso: uma operação que esgotou as tentativas por erro permanente
- * (não de negócio, não transitório) é gravada como FAILED, para ficar auditável
- * em vez de só desaparecer numa DLQ.
- *
- * FAILED é terminal: o id fica "queimado". Reenviar a mesma mensagem devolve o
- * FAILED como replay; para tentar de novo o provedor usa um novo id.
- * Não move saldo, não gera ledger e não precisa do lock da wallet.
- */
 export class RecordFailedTransaction {
   constructor(
     private readonly unitOfWork: UnitOfWork,

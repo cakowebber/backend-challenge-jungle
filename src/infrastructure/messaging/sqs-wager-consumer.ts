@@ -15,36 +15,14 @@ import { abortableSleep, ConsumptionGate } from './consumption-gate';
 import { SQS_CLIENT } from './sqs.provider';
 import { WagerMessageHandler, type MessageDisposition } from './wager-message-handler';
 
-/** Espera antes de tentar de novo quando o próprio SQS falha. */
 const RECEIVE_ERROR_DELAY_MS = 1_000;
 
-/**
- * Consumer da fila wager-transactions.fifo.
- *
- * - N workers; cada um recebe UMA mensagem por vez. Em fila FIFO, um lote traz
- *   várias mensagens do mesmo grupo, e as que vêm atrás de uma mensagem que
- *   falha gastariam tentativas só por terem sido recebidas junto, até irem
- *   para a DLQ com ela. Recebendo uma por vez, a seguinte do grupo nem é
- *   entregue enquanto a da frente está em andamento, e a ordem é preservada.
- * - O ack (DeleteMessage) só acontece depois que o handler retorna, ou seja,
- *   depois do COMMIT. Se o processo morrer entre os dois, o SQS reentrega e a
- *   inbox descarta.
- * - No shutdown: para de buscar, espera o que está em andamento até um prazo e
- *   devolve à fila o que não terminou.
- * - O long poll em curso NUNCA é abortado: o cliente desistir não cancela o
- *   poll no servidor, que ainda entrega uma mensagem para a conexão morta — ela
- *   some pelo tempo de visibilidade e gasta uma tentativa. O worker deixa o
- *   poll terminar (no máximo waitTimeSeconds) e devolve o que vier.
- */
 @Injectable()
 export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicationShutdown {
   private controller: AbortController | undefined;
   private workers: Promise<void>[] = [];
-  /** Long polls em curso, para o shutdown esperar que terminem sozinhos. */
   private readonly polls = new Set<Promise<unknown>>();
-  /** Mensagens em processamento, por receipt handle. */
   private readonly inFlight = new Map<string, Promise<void>>();
-  /** Devolvidas à fila no shutdown: o desfecho tardio do handler é ignorado. */
   private readonly released = new Set<string>();
   private readonly gate: ConsumptionGate;
 
@@ -77,7 +55,6 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
     }
   }
 
-  /** Roda antes de o pool do banco fechar: as mensagens em andamento ainda conseguem commitar. */
   async beforeApplicationShutdown(): Promise<void> {
     await this.stop();
   }
@@ -103,27 +80,17 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
     }
     this.controller = undefined;
 
-    // 1. Para de buscar: nenhum worker inicia um novo long poll.
     controller.abort();
 
-    // 2. Dá tempo para o que está em andamento terminar (commit + ack).
     const graceTimer = new AbortController();
     const drained = await Promise.race([
       Promise.allSettled([...this.inFlight.values()]).then(() => true),
       abortableSleep(this.env.consumer.shutdownGraceMs, graceTimer.signal).then(() => false),
     ]);
-    // Cancela o timer do prazo: pendente, ele manteria o processo vivo depois do shutdown.
     graceTimer.abort();
 
-    // 3. Espera os long polls em curso retornarem (no máximo waitTimeSeconds).
-    //    O que eles trouxerem é devolvido na hora, sem processar. Tem que vir
-    //    antes do passo 4: um poll ainda aberto pegaria de volta a mensagem
-    //    que acabamos de devolver, gastando uma tentativa dela à toa.
     await Promise.allSettled([...this.polls]);
 
-    // 4. O que não terminou volta para a fila agora, em vez de esperar a
-    //    visibilidade expirar. Se o commit ainda acontecer, a redelivery é
-    //    descartada pela inbox.
     if (!drained) {
       const stuck = [...this.inFlight.keys()];
       for (const receiptHandle of stuck) {
@@ -150,7 +117,6 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
         if (signal.aborted) {
           break;
         }
-        // O SQS falhou (rede, serviço fora). Nada foi recebido: só espera e tenta de novo.
         this.logger.warn('falha ao receber mensagens', { reason: describe(error) });
         await abortableSleep(RECEIVE_ERROR_DELAY_MS, signal);
       }
@@ -178,7 +144,6 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
   private async track(message: Message, signal: AbortSignal): Promise<void> {
     const receiptHandle = message.ReceiptHandle as string;
     if (signal.aborted) {
-      // O poll terminou depois do pedido de parada: devolve sem começar.
       await this.changeVisibility(receiptHandle, 0).catch(() => undefined);
       return;
     }
@@ -202,8 +167,6 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
         receiveCount,
       });
     } catch (error) {
-      // O handler classifica todos os erros; se ele mesmo falhar, a mensagem
-      // fica na fila e a redrive policy do broker é a rede de segurança.
       this.logger.error('falha ao classificar a mensagem', { reason: describe(error) });
       disposition = {
         action: 'RETRY',
@@ -214,14 +177,12 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
     }
 
     if (this.released.delete(receiptHandle)) {
-      return; // já foi devolvida à fila no shutdown
+      return;
     }
 
     try {
       await this.settle(message, disposition, receiveCount);
     } catch (error) {
-      // Não conseguiu apagar, adiar ou mover: a mensagem reaparece quando a
-      // visibilidade expirar, e o reprocessamento é seguro (inbox + idempotência).
       this.logger.warn('falha ao concluir a mensagem no SQS', {
         action: disposition.action,
         reason: describe(error),
@@ -246,9 +207,6 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
         return;
 
       case 'DEAD_LETTER':
-        // Envia para a DLQ e só então apaga da fila principal. Se morrer entre
-        // os dois, a mensagem é reprocessada e reenviada: o id de deduplicação
-        // evita a cópia dupla na DLQ.
         await this.sqs.send(
           new SendMessageCommand({
             QueueUrl: this.env.wagerDlqUrl,
@@ -282,11 +240,6 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
     );
   }
 
-  /**
-   * O limite de tentativas vive em dois lugares: aqui (SQS_MAX_ATTEMPTS) e na
-   * redrive policy da fila. Se divergirem, avisa — o broker moveria a mensagem
-   * para a DLQ antes de o consumer gravar o FAILED, ou depois.
-   */
   private async warnIfRedrivePolicyDiffers(): Promise<void> {
     try {
       const { Attributes } = await this.sqs.send(
@@ -300,7 +253,6 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
         });
       }
     } catch {
-      // só diagnóstico: não impede o consumo
     }
   }
 }

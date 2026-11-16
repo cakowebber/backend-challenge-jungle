@@ -15,11 +15,6 @@ export class WageringController {
     private readonly queries: TransactionQueries,
   ) {}
 
-  /**
-   * A resposta só é enviada depois que o use case retorna, e ele só retorna
-   * depois do COMMIT. O status vem do estado gravado da transação, então o
-   * replay responde com o mesmo status e o mesmo corpo.
-   */
   @Post('wagering/transactions')
   async submit(
     @Body() body: unknown,
@@ -27,7 +22,6 @@ export class WageringController {
     @Req() request: CorrelatedRequest & AuthenticatedRequest,
     @Res({ passthrough: true }) response: HttpResponse,
   ): Promise<SubmissionResponse> {
-    // O correlationId (e o header X-Correlation-Id da resposta) vem do middleware.
     const command = parseSubmitTransaction(body, { idempotencyKey, correlationId: correlationIdOf(request) });
     assertActsAs(request, command.providerId);
 
@@ -40,8 +34,6 @@ export class WageringController {
   @Get('wagering/transactions/:transactionId')
   async getById(@Param('transactionId') transactionId: string, @Req() request: AuthenticatedRequest) {
     const transaction = await this.queries.getById(parseUuidParam(transactionId, 'transactionId'));
-    // Aqui o dono só é conhecido depois de carregar a transação. A de outro
-    // provedor responde 404, igual à inexistente, para não revelar que o id existe.
     if (!actsAs(request, transaction.providerId)) {
       throw new ResourceNotFoundError('Transação', transactionId);
     }

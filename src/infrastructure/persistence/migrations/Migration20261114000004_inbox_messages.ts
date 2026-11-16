@@ -1,9 +1,5 @@
 import { Migration } from '@mikro-orm/migrations';
 
-/**
- * inbox_messages — registro das mensagens já consumidas da fila.
- * O INSERT acontece na mesma transação SQL do efeito financeiro.
- */
 export class Migration20261114000004_inbox_messages extends Migration {
   override async up(): Promise<void> {
     this.addSql(`

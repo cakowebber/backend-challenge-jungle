@@ -7,14 +7,6 @@ import {
 } from '../../src/application/ports/provider-identity';
 import { startTestApp, type TestApp, type TransactionPayload, type WalletJson } from '../support/test-app';
 
-/**
- * Ponto de extensão da autenticação (desafio, seção 2). A autenticação não
- * está implementada; estes testes provam que o ponto de extensão é real:
- * trocando só o comportamento da porta ProviderIdentityPort — o que um
- * adaptador de Identity Provider faria —, os endpoints de negócio passam a
- * exigir credencial e a barrar um provedor agindo em nome de outro.
- */
-
 let app: TestApp;
 let wallet: WalletJson;
 
@@ -27,7 +19,6 @@ afterAll(async () => {
   await app.close();
 });
 
-/** Faz a porta se comportar como um IdP: aceita `Bearer token-de-<providerId>`. */
 function turnAuthenticationOn() {
   const port = app.app.get<ProviderIdentityPort>(PROVIDER_IDENTITY);
   return spyOn(port, 'authenticate').mockImplementation(
@@ -138,7 +129,6 @@ describe('com um adaptador de Identity Provider no lugar do no-op', () => {
     expect(own.status).toBe(200);
     expect(own.body.transactionId).toBe(submitted.body.transactionId);
     expect(other.status).toBe(404);
-    // Mesma resposta de um id que não existe: não dá para sondar ids alheios.
     expect(other.body.code).toBe(missing.body.code);
     expect(missing.status).toBe(404);
   });

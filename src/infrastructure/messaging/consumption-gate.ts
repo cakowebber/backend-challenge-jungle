@@ -1,4 +1,3 @@
-/** Espera que termina antes se o sinal for abortado. */
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) {
@@ -20,15 +19,6 @@ export interface GateDelays {
   maxMs: number;
 }
 
-/**
- * Portão do consumo. Quando uma dependência de TODAS as mensagens cai (o
- * banco), o portão fecha e os workers param de receber. Cada recebimento conta
- * como tentativa no SQS; sem o portão, uma queda de poucos minutos gastaria as
- * tentativas de toda mensagem recebida e as empurraria para a DLQ.
- *
- * Fechado, o portão sonda a dependência com backoff e reabre quando ela
- * responde. Todos os workers esperam pela mesma sondagem.
- */
 export class ConsumptionGate {
   private closed = false;
   private reopening: Promise<void> | undefined;
@@ -47,7 +37,6 @@ export class ConsumptionGate {
     this.closed = true;
   }
 
-  /** Resolve na hora com o portão aberto; fechado, só quando a dependência voltar (ou no abort). */
   async waitUntilOpen(signal: AbortSignal): Promise<void> {
     if (!this.closed) {
       return;

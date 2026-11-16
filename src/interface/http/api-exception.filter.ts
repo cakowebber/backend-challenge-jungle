@@ -17,7 +17,6 @@ import { APP_LOGGER, type AppLogger } from '../../application/ports/observabilit
 import { DomainValidationError, InvalidMoneyError } from '../../domain/errors';
 import { correlationIdFrom, type CorrelatedRequest } from './correlation';
 
-/** Corpo de erro único para toda a API. */
 interface ErrorBody {
   code: string;
   message: string;
@@ -29,7 +28,6 @@ interface Mapped {
   status: number;
   body: ErrorBody;
   headers?: Record<string, string>;
-  /** Detalhe só para o log (motivo da falha transitória, stack do erro inesperado). */
   diagnostic?: string;
 }
 
@@ -47,25 +45,6 @@ const HTTP_STATUS_CODES: Readonly<Record<number, string>> = {
   415: 'UNSUPPORTED_MEDIA_TYPE',
 };
 
-/**
- * Único lugar que traduz erro -> status HTTP, para o mapeamento ser o mesmo em
- * todos os endpoints. O provedor decide o que fazer só pelo status:
- *
- *   400 payload inválido            -> corrigir e reenviar
- *   401 credencial ausente ou inválida (só com um adaptador de IdP ligado)
- *   403 provedor agindo em nome de outro
- *   404 recurso consultado não existe
- *   409 conflito de idempotência ou wallet duplicada -> não reenviar igual
- *   422 rejeição de negócio (com failureCode)        -> não reenviar igual
- *   503 falha transitória           -> reenviar a MESMA requisição, com a mesma key
- *   500 erro inesperado
- *
- * (201 e 202, e o 422 de transação gravada, saem pelo controller.)
- *
- * Todo erro é logado aqui uma vez, com o correlationId da requisição: recusa
- * do cliente (4xx) em info, falha transitória em warn, erro inesperado em
- * error com o stack. O corpo da requisição nunca é logado.
- */
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
   constructor(
@@ -80,8 +59,6 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const request = host.switchToHttp().getRequest<FailedRequest>();
     const mapped = this.map(exception);
 
-    // JSON malformado é recusado pelo parser do Express ANTES do middleware de
-    // correlação. Para a resposta e o log não ficarem sem id, ele é resolvido aqui.
     if (request.correlationId === undefined) {
       request.correlationId = correlationIdFrom(request.headers['x-correlation-id'], this.ids);
       httpAdapter.setHeader(response, 'X-Correlation-Id', request.correlationId);
@@ -167,7 +144,6 @@ export class ApiExceptionFilter implements ExceptionFilter {
       };
     }
     if (exception instanceof HttpException) {
-      // Erros do próprio Nest (rota inexistente, JSON malformado...) no mesmo formato.
       const status = exception.getStatus();
       return {
         status,

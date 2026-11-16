@@ -11,9 +11,6 @@ import type { ProcessWagerTransactionCommand } from '../../application/process-w
 import { LEDGER_DEFAULT_LIMIT, LEDGER_MAX_LIMIT } from '../../application/queries';
 import type { Money } from '../../domain/money';
 
-/** Parsers das entradas HTTP. As regras de cada campo ficam em application/input-validation. */
-
-/** Parâmetro de rota que identifica um recurso interno. */
 export function parseUuidParam(value: string, name: string): string {
   const problems = new Problems();
   const parsed = uuid(value, name, problems);
@@ -39,7 +36,6 @@ export function parseCreateWallet(body: unknown, correlationId: string): CreateW
   return { playerId: playerId as string, initialBalance: initialBalance as Money, correlationId };
 }
 
-/** Corpo de POST /wagering/transactions. A idempotency key vem do header. */
 export function parseSubmitTransaction(
   body: unknown,
   metadata: { idempotencyKey: unknown; correlationId: string },

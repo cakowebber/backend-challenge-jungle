@@ -19,10 +19,6 @@ export interface LedgerEntryState {
 
 export type CreateLedgerEntryProps = LedgerEntryState;
 
-/**
- * Lançamento do ledger. Imutável por estrutura: todos os campos são readonly,
- * a instância é congelada e não existe método de transição.
- */
 export class WalletLedgerEntry {
   private constructor(
     public readonly id: string,
@@ -37,7 +33,6 @@ export class WalletLedgerEntry {
     Object.freeze(this);
   }
 
-  /** Valida a aritmética: um lançamento que não fecha nunca chega a existir. */
   static create(props: CreateLedgerEntryProps): WalletLedgerEntry {
     requireNonEmpty('id', props.id);
     requireNonEmpty('walletId', props.walletId);
@@ -59,7 +54,6 @@ export class WalletLedgerEntry {
     return entry;
   }
 
-  /** Reconstrução a partir da persistência — não revalida. */
   static rehydrate(state: LedgerEntryState): WalletLedgerEntry {
     return new WalletLedgerEntry(
       state.id,
@@ -73,7 +67,6 @@ export class WalletLedgerEntry {
     );
   }
 
-  /** balanceBefore ± money === balanceAfter. */
   isBalanced(): boolean {
     const expected =
       this.direction === LedgerDirection.Credit
@@ -82,7 +75,6 @@ export class WalletLedgerEntry {
     return expected.equals(this.balanceAfter);
   }
 
-  /** Efeito do lançamento no saldo: positivo para crédito, negativo para débito. */
   signedAmount(): Money {
     return this.direction === LedgerDirection.Credit ? this.money : this.money.negate();
   }

@@ -19,7 +19,6 @@ afterAll(async () => {
   await orm.close();
 });
 
-/** Tudo que as migrations criam no schema public, fora a tabela de controle do migrator. */
 async function schemaObjects() {
   const tables = await sql`
     SELECT tablename AS name FROM pg_tables

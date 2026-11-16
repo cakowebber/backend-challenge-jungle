@@ -1,22 +1,10 @@
 import type { AppLogger } from '../../application/ports/observability';
 import { abortableSleep } from '../messaging/consumption-gate';
 
-/** MORE: há mais trabalho, roda o próximo ciclo já. IDLE: espera o intervalo. */
 export type TickResult = 'MORE' | 'IDLE';
 
-/** Teto da espera entre ciclos quando eles falham em sequência (ex.: banco fora). */
 const MAX_FAILURE_DELAY_MS = 15_000;
 
-/**
- * Laço de um worker agendado: roda um ciclo, espera, roda de novo.
- *
- * - Um ciclo por vez nesta instância; a concorrência é ENTRE instâncias, e é
- *   resolvida no banco (SKIP LOCKED na outbox, lock da wallet no worker de
- *   referência), não aqui.
- * - Um ciclo que lança não derruba o laço: registra e tenta de novo, com
- *   espera crescente enquanto continuar falhando.
- * - stop() interrompe a espera e aguarda o ciclo em curso terminar.
- */
 export class PollingLoop {
   private controller: AbortController | undefined;
   private running: Promise<void> | undefined;

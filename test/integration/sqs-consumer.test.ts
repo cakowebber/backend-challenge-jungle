@@ -5,17 +5,8 @@ import { WagerMessageHandler } from '../../src/infrastructure/messaging/wager-me
 import { startTestApp, type TestApp, type WalletJson } from '../support/test-app';
 import { eventually, TestQueues, wagerMessageBody } from '../support/test-queues';
 
-/**
- * Consumer contra LocalStack e Postgres REAIS: as mensagens passam pelo SQS de
- * verdade (visibilidade, contagem de recebimentos, redrive) e os efeitos são
- * conferidos no banco.
- */
-
 const MAX_ATTEMPTS = 3;
 
-// Vários testes daqui esperam tempos reais do SQS (backoff de 1s + 2s,
-// visibilidade, long poll) e levam de 3 a 5 segundos: o prazo padrão de 5s por
-// teste do Bun os derrubava de forma intermitente.
 setDefaultTimeout(30_000);
 
 let app: TestApp;
@@ -42,7 +33,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  consumer.start(); // alguns testes param o consumer; cada teste começa com ele rodando
+  consumer.start();
 });
 
 afterAll(async () => {
@@ -66,7 +57,6 @@ async function inboxRows(messageId: string): Promise<number> {
 
 const queueIsEmpty = async () => (await queues.depth(queues.queueUrl)) === 0;
 
-/** Lê e remove as mensagens da DLQ. */
 async function deadLetters() {
   const messages = await queues.drain(queues.dlqUrl);
   return messages.map((message) => ({
@@ -90,7 +80,6 @@ describe('mensagem válida', () => {
     expect(transaction).toMatchObject({ status: 'PROCESSED', kind: 'BET', balance: '75.00' });
     expect(await inboxRows(messageId)).toBe(1);
     expect(await app.ledgerMatchesBalance(wallet.id)).toBe(true);
-    // a transação gravada pela fila é a mesma que o HTTP enxerga
     const viaHttp = await app.get(`/providers/provider-a/wagering/transactions/${payload.externalTransactionId}`);
     expect(viaHttp.body).toMatchObject({ transactionId: transaction?.id, status: 'PROCESSED', balance: BRL('75.00') });
   });
@@ -102,7 +91,6 @@ describe('mensagem válida', () => {
     const messageId = await queues.send(payload);
     await eventually('aposta processada', async () => (await app.balanceOf(wallet.id)) === '90.00');
 
-    // xmin é o id da transação do Postgres que gravou a linha.
     const [row] = await app.sql`
       SELECT (SELECT xmin::text FROM inbox_messages WHERE message_id = ${messageId}) AS inbox,
              (SELECT e.xmin::text FROM wallet_ledger_entries e JOIN wager_transactions t ON t.id = e.transaction_id
@@ -154,14 +142,13 @@ describe('mensagem válida', () => {
     const bet = app.payload(wallet, 'BET', '40.00');
     const refund = app.payload(wallet, 'REFUND', '40.00', { referenceExternalTransactionId: bet.externalTransactionId });
 
-    await queues.send(bet); // mesmo grupo (a wallet)
+    await queues.send(bet);
     await queues.send(refund);
     await eventually('as duas resolvidas', async () => {
       const row = await transactionByExternalId(refund.externalTransactionId);
       return row !== undefined;
     });
 
-    // Se o REFUND passasse na frente, ficaria PENDING_REFERENCE.
     expect(await transactionByExternalId(refund.externalTransactionId)).toMatchObject({ status: 'PROCESSED' });
     expect(await app.balanceOf(wallet.id)).toBe('100.00');
   });
@@ -173,25 +160,22 @@ describe('redelivery não duplica efeito', () => {
     const payload = app.payload(wallet, 'BET', '25.00');
     const handler = app.app.get(WagerMessageHandler);
 
-    // Um "worker" recebe a mensagem, commita o efeito e morre sem apagar a mensagem.
     await consumer.stop();
     const messageId = await queues.send(payload);
     const [received] = await queues.receive(queues.queueUrl, { waitSeconds: 2, visibilitySeconds: 1 });
     const disposition = await handler.handle({ body: received?.Body as string, receiveCount: 1 });
     expect(disposition).toEqual({ action: 'ACK', outcome: 'PROCESSED' });
     expect(await app.balanceOf(wallet.id)).toBe('75.00');
-    // ...e aqui ele morreria: o DeleteMessage nunca é enviado.
 
-    // A visibilidade expira e outra instância assume.
     const duplicatesBefore = app.metrics.value(MetricName.MessagesByOutcome, { outcome: 'DUPLICATE' });
     consumer.start();
     await eventually('redelivery descartada e apagada', queueIsEmpty);
 
     expect(app.metrics.value(MetricName.MessagesByOutcome, { outcome: 'DUPLICATE' })).toBe(duplicatesBefore + 1);
-    expect(await app.balanceOf(wallet.id)).toBe('75.00'); // um débito só
+    expect(await app.balanceOf(wallet.id)).toBe('75.00');
     expect((await app.ledgerOf(wallet.id)).filter((e) => e.direction === 'DEBIT')).toHaveLength(1);
     expect(await inboxRows(messageId)).toBe(1);
-    expect(await app.eventsOf(wallet.id)).toEqual(['WalletBalanceChanged', 'WalletBalanceChanged']); // abertura + 1 aposta
+    expect(await app.eventsOf(wallet.id)).toEqual(['WalletBalanceChanged', 'WalletBalanceChanged']);
   });
 
   test('o produtor reenvia a mesma mensagem (mesmo messageId) 5 vezes: um efeito', async () => {
@@ -218,7 +202,6 @@ describe('redelivery não duplica efeito', () => {
     await eventually('as duas apagadas', queueIsEmpty);
 
     expect(await app.balanceOf(wallet.id)).toBe('90.00');
-    // as duas mensagens ficam registradas; só a primeira gerou efeito
     expect((await inboxRows(first)) + (await inboxRows(second))).toBe(2);
   });
 
@@ -241,7 +224,6 @@ describe('redelivery não duplica efeito', () => {
 
     await Promise.all(
       Array.from({ length: 30 }, (_, i) =>
-        // grupos diferentes, para os workers realmente disputarem a wallet
         queues.send(app.payload(wallet, 'BET', '10.00'), { group: `grupo-${i}` }),
       ),
     );
@@ -276,7 +258,7 @@ describe('mensagem venenosa vai para a DLQ', () => {
       messageId: 'msg-venenosa',
       type: 'TipoDesconhecido',
       occurredAt: 'ontem',
-      data: { ...payload, money: { amount: 25, currency: 'BRL' }, kind: 'OPENING' }, // sem idempotencyKey
+      data: { ...payload, money: { amount: 25, currency: 'BRL' }, kind: 'OPENING' },
     });
 
     await queues.sendRaw(body, wallet.id);
@@ -311,7 +293,7 @@ describe('mensagem venenosa vai para a DLQ', () => {
 
     expect(dead?.reason).toBe('WALLET_NOT_FOUND');
     expect(JSON.parse(dead?.body as string).messageId).toBe(messageId);
-    expect(await inboxRows(messageId)).toBe(0); // o registro da inbox foi desfeito junto com a transação
+    expect(await inboxRows(messageId)).toBe(0);
   });
 
   test('mesma idempotency key com payload divergente: DLQ, sem alterar o saldo', async () => {
@@ -332,7 +314,7 @@ describe('mensagem venenosa vai para a DLQ', () => {
     await queues.send(app.payload(wallet, 'BET', '10.00'), { messageId });
     await eventually('primeira processada', async () => (await app.balanceOf(wallet.id)) === '90.00');
 
-    await queues.send(app.payload(wallet, 'BET', '10.00'), { messageId }); // outra operação, mesmo messageId
+    await queues.send(app.payload(wallet, 'BET', '10.00'), { messageId });
     await eventually('fila principal vazia', queueIsEmpty);
 
     expect((await deadLetters())[0]?.reason).toBe('MESSAGE_ID_CONFLICT');
@@ -340,7 +322,6 @@ describe('mensagem venenosa vai para a DLQ', () => {
   });
 
   test('erro inesperado em toda tentativa: esgota o limite, grava FAILED e vai para a DLQ', async () => {
-    // Falha real do banco na gravação do evento de sucesso, só para mensagens marcadas.
     await app.sql.unsafe(`
       CREATE FUNCTION test_poison_outbox() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
@@ -364,10 +345,8 @@ describe('mensagem venenosa vai para a DLQ', () => {
 
     expect(dead).toMatchObject({ reason: 'PROCESSING_FAILED', receiveCount: String(MAX_ATTEMPTS) });
     expect(dead?.detail).toContain('registro FAILED: RECORDED');
-    // tentou MAX_ATTEMPTS vezes: MAX_ATTEMPTS - 1 retries com backoff e a tentativa final
     expect(app.metrics.value(MetricName.MessageRetries, { reason: 'UNEXPECTED_ERROR' })).toBe(retriesBefore + MAX_ATTEMPTS - 1);
 
-    // A operação fica auditável como FAILED, sem efeito financeiro.
     const failed = await transactionByExternalId(payload.externalTransactionId);
     expect(failed).toMatchObject({ status: 'FAILED', failure_code: 'PROCESSING_FAILED' });
     expect(await app.eventsOf(failed?.id as string)).toEqual(['WagerTransactionFailed']);
@@ -375,7 +354,6 @@ describe('mensagem venenosa vai para a DLQ', () => {
     expect(await app.ledgerOf(wallet.id)).toHaveLength(1);
     expect(await inboxRows(messageId)).toBe(1);
 
-    // FAILED é terminal: reenviar a mesma mensagem não processa, só reconhece.
     await queues.send(payload, { messageId });
     await eventually('reenvio apagado', queueIsEmpty);
     expect(await app.balanceOf(wallet.id)).toBe('100.00');
@@ -407,7 +385,6 @@ describe('falha transitória', () => {
       async () => app.metrics.value(MetricName.MessageRetries, { reason: 'LOCK_TIMEOUT' }) > retriesBefore,
     );
 
-    // Falhou, mas nada foi gravado e a mensagem continua na fila (invisível, em backoff).
     expect(await transactionByExternalId(payload.externalTransactionId)).toBeUndefined();
     expect(await inboxRows(messageId)).toBe(0);
     expect(await queues.depth(queues.queueUrl)).toBe(1);
@@ -419,13 +396,12 @@ describe('falha transitória', () => {
 
     expect(await transactionByExternalId(payload.externalTransactionId)).toMatchObject({ status: 'PROCESSED' });
     expect(await deadLetters()).toEqual([]);
-    expect(consumer.isPaused).toBe(false); // lock de uma wallet não pausa o consumo
+    expect(consumer.isPaused).toBe(false);
   });
 });
 
 describe('SIGTERM / shutdown', () => {
   test('para de buscar, e a mensagem em andamento que não termina a tempo é devolvida à fila', async () => {
-    // Instância própria: espera longa pelo lock e prazo curto de shutdown.
     const ownQueues = await TestQueues.create('consumer-shutdown', MAX_ATTEMPTS);
     const instance = await startTestApp('sqs_consumer_shutdown', {
       wagerQueueUrl: ownQueues.queueUrl,
@@ -458,24 +434,21 @@ describe('SIGTERM / shutdown', () => {
       });
       await lockTaken;
 
-      // A mensagem fica em andamento, presa esperando o lock da wallet.
       await ownQueues.send(payload);
       await eventually('mensagem em andamento', async () => worker.inFlightCount === 1);
 
       const started = performance.now();
-      await worker.stop(); // o que o SIGTERM dispara (beforeApplicationShutdown)
+      await worker.stop();
       const elapsed = performance.now() - started;
 
-      expect(elapsed).toBeGreaterThanOrEqual(450); // esperou o prazo...
-      expect(elapsed).toBeLessThan(3_000); // ...e não a visibilidade de 30s
+      expect(elapsed).toBeGreaterThanOrEqual(450);
+      expect(elapsed).toBeLessThan(3_000);
       expect(worker.isRunning).toBe(false);
 
-      // Devolvida: já está visível de novo, sem esperar os 30s.
       const [returned] = await ownQueues.receive(ownQueues.queueUrl, { waitSeconds: 2, visibilitySeconds: 0 });
       expect(JSON.parse(returned?.Body as string).data.externalTransactionId).toBe(payload.externalTransactionId);
       expect(returned?.Attributes?.ApproximateReceiveCount).toBe('2');
 
-      // Parou de buscar: mensagem nova fica na fila.
       const other = instance.payload(wallet, 'BET', '1.00');
       await ownQueues.send(other, { group: 'outro-grupo' });
       await Bun.sleep(1_500);
@@ -483,19 +456,17 @@ describe('SIGTERM / shutdown', () => {
         SELECT count(*)::int AS n FROM wager_transactions WHERE external_transaction_id = ${other.externalTransactionId}`;
       expect(row.n).toBe(0);
 
-      // O lock é solto: a transação que estava em andamento ainda commita...
       release();
       await holder;
       await eventually('efeito da mensagem em andamento', async () => (await instance.balanceOf(wallet.id)) === '75.00');
 
-      // ...e a cópia devolvida, ao ser reentregue para outra instância, é descartada pela inbox.
       worker.start();
       await eventually('fila vazia', async () => (await ownQueues.depth(ownQueues.queueUrl)) === 0, 20_000);
-      expect(await instance.balanceOf(wallet.id)).toBe('74.00'); // 25.00 uma vez + 1.00 da outra mensagem
+      expect(await instance.balanceOf(wallet.id)).toBe('74.00');
       expect((await instance.ledgerOf(wallet.id)).filter((e) => e.direction === 'DEBIT')).toHaveLength(2);
       expect(await instance.ledgerMatchesBalance(wallet.id)).toBe(true);
     } finally {
-      release(); // se uma asserção falhar antes, o lock não pode ficar preso
+      release();
       await holder.catch(() => undefined);
       await instance.close();
       await ownQueues.destroy();

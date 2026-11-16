@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import { dirname, join, normalize } from 'node:path';
 
-/** A aplicação conhece o domínio e o Node, mas não o Nest, o ORM nem a infraestrutura. */
 const ALLOWED_PACKAGES = new Set(['node:crypto']);
 
 test('a camada de aplicação só importa dela mesma, do domínio e de node:crypto', async () => {
@@ -15,7 +14,6 @@ test('a camada de aplicação só importa dela mesma, do domínio e de node:cryp
     const source = await Bun.file(join(import.meta.dir, file)).text();
     for (const [, specifier] of source.matchAll(/from\s+'([^']+)'/g)) {
       if (specifier === undefined) continue;
-      // caminho relativo a src/: só "application/..." (sem "..") ou "../domain/..." são aceitos
       const resolved = normalize(join('application', dirname(file), specifier));
       const allowed = specifier.startsWith('.')
         ? resolved.startsWith('application/') || resolved.startsWith('domain/')

@@ -38,7 +38,6 @@ describe('WalletLedgerEntry.create', () => {
     expect(() => WalletLedgerEntry.create(props({ balanceAfter: brl('20.01') }))).toThrow(
       UnbalancedLedgerEntryError,
     );
-    // direção trocada: 100 + 80 não é 20
     expect(() => WalletLedgerEntry.create(props({ direction: LedgerDirection.Credit }))).toThrow(
       UnbalancedLedgerEntryError,
     );

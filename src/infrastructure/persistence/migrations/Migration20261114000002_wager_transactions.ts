@@ -1,9 +1,5 @@
 import { Migration } from '@mikro-orm/migrations';
 
-/**
- * wager_transactions — toda operação recebida (inclusive rejeitadas) e a
- * OPENING interna. É onde a idempotência é garantida.
- */
 export class Migration20261114000002_wager_transactions extends Migration {
   override async up(): Promise<void> {
     this.addSql(`
@@ -87,22 +83,18 @@ export class Migration20261114000002_wager_transactions extends Migration {
       )
     `);
 
-    // Uma referência tem no máximo UMA reversão aplicada, de qualquer tipo
-    // (desafio 7, regra 4, leitura estrita). Reversões rejeitadas não contam.
     this.addSql(`
       CREATE UNIQUE INDEX wager_transactions_single_reversal_key
         ON wager_transactions (reference_transaction_id)
         WHERE kind IN ('REFUND', 'ROLLBACK') AND status = 'PROCESSED'
     `);
 
-    // Fila do worker de PENDING_REFERENCE: só as pendentes, por vencimento.
     this.addSql(`
       CREATE INDEX wager_transactions_pending_reference_idx
         ON wager_transactions (next_reference_attempt_at)
         WHERE status = 'PENDING_REFERENCE'
     `);
 
-    // Estados terminais não mudam mais, a identidade nunca muda e nada é apagado.
     this.addSql(`
       CREATE FUNCTION wager_transactions_guard() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
@@ -154,7 +146,6 @@ export class Migration20261114000002_wager_transactions extends Migration {
   }
 
   override async down(): Promise<void> {
-    // Índices e triggers caem junto com a tabela.
     this.addSql(`DROP TABLE wager_transactions`);
     this.addSql(`DROP FUNCTION wager_transactions_guard()`);
   }

@@ -1,11 +1,5 @@
 import type { SQL } from 'bun';
 
-/**
- * Linhas válidas para inserir com SQL direto nos testes de schema.
- * Cada teste parte de uma linha válida e estraga UM campo, para que a falha
- * seja da constraint em teste e de nenhuma outra.
- */
-
 export interface WalletRow {
   id: string;
   player_id: string;
@@ -69,7 +63,6 @@ export function walletRow(overrides: Partial<WalletRow> = {}): WalletRow {
   };
 }
 
-/** BET PROCESSED de 25.00 por padrão. */
 export function transactionRow(walletId: string, overrides: Partial<TransactionRow> = {}): TransactionRow {
   const id = overrides.id ?? uuid();
   const providerId = overrides.provider_id ?? 'provider-a';
@@ -101,7 +94,6 @@ export function transactionRow(walletId: string, overrides: Partial<TransactionR
   };
 }
 
-/** DEBIT de 25.00 levando o saldo de 100.00 para 75.00, por padrão. */
 export function ledgerRow(walletId: string, transactionId: string, overrides: Partial<LedgerRow> = {}): LedgerRow {
   return {
     id: uuid(),
@@ -132,10 +124,6 @@ export async function insertLedgerEntry(db: SQL, row: LedgerRow): Promise<Ledger
   return row;
 }
 
-/**
- * Abre uma wallet como a aplicação faz: wallet + transação OPENING + lançamento
- * CREDIT na mesma transação SQL. Com saldo zero, só a wallet.
- */
 export async function openWallet(sql: SQL, balance = '100.00', overrides: Partial<WalletRow> = {}): Promise<WalletRow> {
   const wallet = walletRow({ balance, ...overrides });
 
@@ -167,10 +155,6 @@ export async function openWallet(sql: SQL, balance = '100.00', overrides: Partia
   return wallet;
 }
 
-/**
- * Aplica um débito consistente (transação BET + saldo + lançamento) numa wallet
- * que está com `before`. Devolve a transação e o lançamento gravados.
- */
 export async function debit(
   sql: SQL,
   wallet: WalletRow,
@@ -189,10 +173,6 @@ export async function debit(
   });
 }
 
-/**
- * Saldo como texto exato. O `::text` é necessário: o cliente Postgres do Bun
- * (usado só nestes testes) devolve o NUMERIC 0.00 como "0", perdendo a escala.
- */
 export async function balanceOf(sql: SQL, walletId: string): Promise<string> {
   const [row] = await sql`SELECT balance::text FROM wallets WHERE id = ${walletId}`;
   return row.balance as string;

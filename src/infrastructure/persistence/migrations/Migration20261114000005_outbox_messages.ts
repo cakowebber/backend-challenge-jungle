@@ -1,9 +1,5 @@
 import { Migration } from '@mikro-orm/migrations';
 
-/**
- * outbox_messages — eventos gravados na mesma transação SQL da mudança que os
- * originou, publicados depois do commit por um worker.
- */
 export class Migration20261114000005_outbox_messages extends Migration {
   override async up(): Promise<void> {
     this.addSql(`
@@ -26,8 +22,6 @@ export class Migration20261114000005_outbox_messages extends Migration {
       )
     `);
 
-    // Índice parcial: o publisher só enxerga as pendentes, na ordem em que
-    // ocorreram. O custo da varredura não cresce com o histórico já publicado.
     this.addSql(`
       CREATE INDEX outbox_messages_pending_idx
         ON outbox_messages (occurred_at, id)
