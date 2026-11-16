@@ -1,0 +1,3 @@
+[test]
+# Os decorators do Nest precisam do polyfill de Reflect carregado antes de qualquer módulo.
+preload = ["reflect-metadata"]

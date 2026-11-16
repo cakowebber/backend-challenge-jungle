@@ -1,0 +1,87 @@
+name: wagering
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: wagering
+      POSTGRES_PASSWORD: wagering
+      POSTGRES_DB: wagering
+    ports:
+      - "5432:5432"
+    volumes:
+      # A partir do Postgres 18 a imagem espera o volume em /var/lib/postgresql.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wagering -d wagering"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  localstack:
+    # Fixada na linha 4.x: a partir da 2026.03 a imagem exige LOCALSTACK_AUTH_TOKEN.
+    image: localstack/localstack:4.14.0
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./localstack/init/ready.d:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      # Só fica saudável depois que o script de init criou a fila principal
+      # (a última a ser criada), então a app nunca sobe antes das filas.
+      test: ["CMD-SHELL", "awslocal sqs get-queue-url --queue-name wager-transactions.fifo"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  # Aplica as migrations uma única vez e termina. Fica fora do boot da app para
+  # que N instâncias não disputem a migração ao subir juntas.
+  migrate:
+    build: .
+    image: wagering-app
+    command: ["bun", "run", "migration:up"]
+    environment:
+      DATABASE_URL: postgresql://wagering:wagering@postgres:5432/wagering
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build: .
+    image: wagering-app
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgresql://wagering:wagering@postgres:5432/wagering
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SQS_ENDPOINT: http://localstack:4566
+      SQS_WAGER_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+      SQS_WAGER_DLQ_URL: http://localstack:4566/000000000000/wager-transactions-dlq.fifo
+      SQS_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events.fifo
+    ports:
+      # Uma instância: sempre em localhost:3000.
+      # Três instâncias: `APP_PORTS=3000-3002 docker compose up -d --scale app=3`
+      # (ficam em 3000, 3001 e 3002). A faixa não é o padrão porque, com ela, o
+      # Docker escolhe qualquer porta da faixa mesmo para uma instância só.
+      - "${APP_PORTS:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Tempo para concluir o que está em andamento antes do SIGKILL.
+    stop_grace_period: 30s
+
+volumes:
+  postgres-data:
